@@ -225,3 +225,48 @@ Before finishing:
 - Reviewer modifies production code.
 - Handoff is incomplete.
 - Template placeholders remain in the output.
+
+---
+
+## Remediation (2026-07-25)
+
+### Findings Fixed
+
+| Finding | Severity | Fix |
+|---|---|---|
+| F-001 | HIGH | Changed `App.tsx` routes from `blank-tool`/`chat-tool` to `blank_tool`/`chat_tool` to match tool_id values from the backend registry |
+| F-002 | HIGH | Wired `async_session_factory` + `create_session`/`add_message` into `ws/handler.py`; session created on connect, user and bot messages persisted per turn |
+| F-003 | HIGH | Removed broken `BASE_DIR` line from `config.py` (unused); backend now imports and starts without crash |
+| F-004 | MEDIUM | Updated `alembic/env.py` to strip `+asyncpg` from the DB URL at runtime so Alembic's synchronous engine works correctly |
+| F-005 | MEDIUM | Removed `volumes: ./frontend:/app` from `docker-compose.yml` frontend service (the mount overwrote `dist/` built by the Dockerfile) |
+| F-006 | LOW | Added `.dockerignore` files for `frontend/` and `backend/` excluding dev artifacts |
+
+### Files Changed
+
+- `frontend/src/App.tsx` — route paths fixed (F-001)
+- `backend/app/ws/handler.py` — chat persistence wired (F-002)
+- `backend/app/core/config.py` — broken BASE_DIR removed (F-003)
+- `backend/alembic/env.py` — async URL compat fix (F-004)
+- `docker-compose.yml` — frontend volume mount removed (F-005)
+- `frontend/.dockerignore` — added (F-006)
+- `backend/.dockerignore` — added (F-006)
+- `backend/.gitignore` — added `__pycache__/` and `*.pyc`
+
+### Verification
+
+| Check | Result |
+|---|---|
+| `npm run build` (frontend) | PASS |
+| `ruff check .` (backend) | PASS |
+| `python -c "from app.main import app"` | PASS - backend no longer crashes at import |
+| Validator | PASS |
+
+### Residual Risks
+
+- Chat persistence requires a running PostgreSQL instance - the WebSocket handler degrades gracefully with a warning log if the DB is unavailable.
+- Docker compose and end-to-end smoke tests were not executed locally.
+
+### Remediation Final Status
+
+- Candidate HEAD: `008ac87`
+- Next step: Re-review in a fresh Claude session

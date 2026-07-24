@@ -2,16 +2,16 @@
 workflow_id: WF-20260725-ai-toolsite-arch-82F8
 title: "AI Tool Site — Architecture Bootstrap"
 status: ACTIVE
-stage: REMEDIATION
-state_version: 8
+stage: CLAUDE_REVIEW
+state_version: 9
 created_at_utc: 2026-07-25T07:00:00Z
 created_by: CLAUDE_BOOTSTRAP
 base_branch: master
 base_commit: a80e6f6
 working_branch: agent/wf-20260725-ai-toolsite-arch-82f8
-current_owner: CLAUDE_REMEDIATION
+current_owner: CLAUDE_REVIEW
 last_updated_utc: 2026-07-25T08:10:00Z
-repository_head: c4512d6
+repository_head: 008ac87
 execution_mode: SERIAL
 approved_remediation_findings: F-001,F-002,F-003,F-004,F-005,F-006
 depends_on_commit: NONE
@@ -71,3 +71,4 @@ depends_on_commit: NONE
 | 7 | CLAUDE_REVIEW | CLAUDE_REVIEW | 62854a9 | State version synced after minor fix |
 | 7 | CLAUDE_REVIEW | CLAUDE_REVIEW | c4512d6 | Independent review: REMEDIATE with 6 findings (pending Human selection) |
 | 8 | REMEDIATION | CLAUDE_REMEDIATION | c4512d6 | Human selected all 6 findings for remediation |
+| 9 | CLAUDE_REVIEW | CLAUDE_REVIEW | 008ac87 | All 6 findings remediated; ready for re-review |
