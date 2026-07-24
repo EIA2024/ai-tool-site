@@ -11,11 +11,15 @@ if config.config_file_name is not None:
 
 target_metadata = Base.metadata
 
+# Strip +asyncpg for Alembic's synchronous engine
+db_url = config.get_main_option("sqlalchemy.url", "")
+if db_url.startswith("postgresql+asyncpg://"):
+    db_url = db_url.replace("postgresql+asyncpg://", "postgresql://", 1)
+
 
 def run_migrations_offline() -> None:
-    url = config.get_main_option("sqlalchemy.url")
     context.configure(
-        url=url,
+        url=db_url,
         target_metadata=target_metadata,
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
@@ -25,8 +29,10 @@ def run_migrations_offline() -> None:
 
 
 def run_migrations_online() -> None:
+    configuration = config.get_section(config.config_ini_section, {})
+    configuration["sqlalchemy.url"] = db_url
     connectable = engine_from_config(
-        config.get_section(config.config_ini_section, {}),
+        configuration,
         prefix="sqlalchemy.",
         poolclass=pool.NullPool,
     )

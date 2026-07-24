@@ -54,8 +54,6 @@ services:
       - "${FRONTEND_PORT:-5173}:5173"
     depends_on:
       - backend
-    volumes:
-      - ./frontend:/app
 
 volumes:
   pgdata:

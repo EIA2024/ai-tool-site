@@ -9,8 +9,8 @@ function App() {
     <Routes>
       <Route element={<Layout />}>
         <Route path="/" element={<ToolList />} />
-        <Route path="/tools/blank-tool" element={<BlankToolPage />} />
-        <Route path="/tools/chat-tool" element={<ChatToolPage />} />
+        <Route path="/tools/blank_tool" element={<BlankToolPage />} />
+        <Route path="/tools/chat_tool" element={<ChatToolPage />} />
       </Route>
     </Routes>
   );
