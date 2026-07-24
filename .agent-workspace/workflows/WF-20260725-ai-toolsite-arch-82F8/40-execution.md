@@ -173,7 +173,7 @@ candidate_head: f81d926
 
 ```text
 WORKFLOW_ID: WF-20260725-ai-toolsite-arch-82F8
-EXPECTED_STATE_VERSION: 7
+EXPECTED_STATE_VERSION: 9
 ROLE: CLAUDE_REVIEW
 WORKFLOW_PATH: .agent-workspace/workflows/WF-20260725-ai-toolsite-arch-82F8
 
