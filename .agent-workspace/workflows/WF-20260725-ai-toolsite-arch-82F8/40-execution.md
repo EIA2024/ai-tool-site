@@ -137,7 +137,7 @@ candidate_head: f81d926
 ### Workflow
 
 - Workflow ID: `WF-20260725-ai-toolsite-arch-82F8`
-- State version: `6`
+- State version: `7`
 - Completed role: `CLAUDE_EXECUTION`
 - Current stage: `CLAUDE_REVIEW`
 - Next role: `CLAUDE_REVIEW`
@@ -173,7 +173,7 @@ candidate_head: f81d926
 
 ```text
 WORKFLOW_ID: WF-20260725-ai-toolsite-arch-82F8
-EXPECTED_STATE_VERSION: 6
+EXPECTED_STATE_VERSION: 7
 ROLE: CLAUDE_REVIEW
 WORKFLOW_PATH: .agent-workspace/workflows/WF-20260725-ai-toolsite-arch-82F8
 
