@@ -1,0 +1,272 @@
+:root {
+  --bg: #0f1117;
+  --bg-card: #1a1d27;
+  --bg-nav: #141720;
+  --text: #e1e4ea;
+  --text-dim: #8b8fa3;
+  --accent: #6366f1;
+  --accent-hover: #818cf8;
+  --border: #262a36;
+  --success: #34d399;
+  --error: #f87171;
+  --warning: #fbbf24;
+
+  font-family: "Inter", system-ui, -apple-system, sans-serif;
+  font-size: 16px;
+  line-height: 1.5;
+  color: var(--text);
+  background: var(--bg);
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  min-height: 100vh;
+}
+
+a {
+  color: var(--accent);
+  text-decoration: none;
+}
+a:hover {
+  color: var(--accent-hover);
+}
+
+/* Layout */
+.layout {
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+}
+
+/* Navbar */
+.navbar {
+  display: flex;
+  align-items: center;
+  padding: 0.75rem 2rem;
+  background: var(--bg-nav);
+  border-bottom: 1px solid var(--border);
+  gap: 2rem;
+}
+.nav-brand {
+  font-weight: 700;
+  font-size: 1.2rem;
+  color: var(--text) !important;
+}
+.nav-links {
+  display: flex;
+  gap: 1.25rem;
+}
+.nav-links a {
+  color: var(--text-dim) !important;
+  font-size: 0.9rem;
+  transition: color 0.15s;
+}
+.nav-links a:hover {
+  color: var(--text) !important;
+}
+
+/* Main content */
+.main-content {
+  flex: 1;
+  padding: 2rem;
+  max-width: 960px;
+  width: 100%;
+  margin: 0 auto;
+}
+
+/* Tool list */
+.tool-list h1 {
+  font-size: 2rem;
+  font-weight: 700;
+  margin-bottom: 0.25rem;
+}
+.subtitle {
+  color: var(--text-dim);
+  margin-bottom: 2rem;
+}
+.tool-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 1rem;
+}
+.tool-card {
+  display: block;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 0.75rem;
+  padding: 1.25rem;
+  transition: border-color 0.15s;
+  color: var(--text) !important;
+}
+.tool-card:hover {
+  border-color: var(--accent);
+}
+.tool-card h3 {
+  font-size: 1.1rem;
+  font-weight: 600;
+  margin-bottom: 0.25rem;
+}
+.tool-card p {
+  color: var(--text-dim);
+  font-size: 0.85rem;
+  margin-bottom: 0.75rem;
+}
+.tool-mode {
+  font-size: 0.75rem;
+  padding: 0.2rem 0.5rem;
+  border-radius: 0.25rem;
+  background: var(--border);
+}
+.mode-request-response {
+  background: #1e3a5f;
+  color: #93c5fd;
+}
+.mode-realtime {
+  background: #3b1f3b;
+  color: #c4b5fd;
+}
+.placeholder {
+  opacity: 0.4;
+  font-size: 0.85rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 100px;
+}
+
+/* Tool page */
+.tool-page h2 {
+  font-size: 1.5rem;
+  font-weight: 600;
+  margin-bottom: 0.25rem;
+}
+.tool-page > p {
+  color: var(--text-dim);
+  margin-bottom: 1.5rem;
+}
+.input-area {
+  display: flex;
+  gap: 0.5rem;
+  margin-bottom: 1rem;
+}
+.input-area input {
+  flex: 1;
+  padding: 0.6rem 1rem;
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+  background: var(--bg-card);
+  color: var(--text);
+  font-size: 0.9rem;
+}
+.input-area input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+button {
+  padding: 0.6rem 1.25rem;
+  border: none;
+  border-radius: 0.5rem;
+  background: var(--accent);
+  color: #fff;
+  font-size: 0.9rem;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+button:hover {
+  background: var(--accent-hover);
+}
+button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.result-box {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+  padding: 1rem;
+  overflow-x: auto;
+  font-family: "Fira Code", "Consolas", monospace;
+  font-size: 0.85rem;
+}
+
+/* Chat */
+.chat-controls {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin-bottom: 1rem;
+}
+.ws-status {
+  font-size: 0.8rem;
+  padding: 0.2rem 0.5rem;
+  border-radius: 0.25rem;
+  background: var(--border);
+}
+.status-connected {
+  color: var(--success);
+}
+.status-disconnected {
+  color: var(--text-dim);
+}
+.status-error {
+  color: var(--error);
+}
+.status-reconnecting {
+  color: var(--warning);
+}
+.chat-messages {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+  padding: 1rem;
+  min-height: 200px;
+  max-height: 400px;
+  overflow-y: auto;
+  margin-bottom: 0.75rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+.chat-message {
+  padding: 0.4rem 0.75rem;
+  border-radius: 0.5rem;
+  font-size: 0.9rem;
+}
+.message-user {
+  align-self: flex-end;
+  background: var(--accent);
+  color: #fff;
+}
+.message-bot {
+  align-self: flex-start;
+  background: var(--border);
+}
+.chat-input {
+  display: flex;
+  gap: 0.5rem;
+}
+.chat-input input {
+  flex: 1;
+  padding: 0.6rem 1rem;
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+  background: var(--bg-card);
+  color: var(--text);
+  font-size: 0.9rem;
+}
+.chat-input input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+/* Status text */
+.status-text {
+  color: var(--text-dim);
+  text-align: center;
+  padding: 2rem;
+}
