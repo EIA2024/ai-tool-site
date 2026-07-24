@@ -117,14 +117,41 @@ docker run --rm -v ai-tool-site_pgdata:/source -v $(pwd)/backup:/backup \
 
 ### 容器健康检查
 
-所有服务配置了健康检查。查看健康状态：
+All services configured with health checks. Check status:
 
 ```bash
 docker compose ps
-# 健康状态下显示 "healthy"，启动中显示 "starting"
+# "healthy" = OK, "starting" = booting up
 
-# 查看具体健康检查日志
+# Check specific health log
 docker inspect --format='{{json .State.Health}}' $(docker compose ps -q postgres)
+```
+
+### 后端启动流程（Docker）
+
+每次 `docker compose up --build` 时，后端容器启动顺序：
+
+1. `alembic upgrade head` — 自动运行所有待执行的数据库迁移
+   - 使用环境变量 `DATABASE_URL` 连接 PostgreSQL（Docker 内部 hostname `postgres`）
+   - 同步驱动使用 `psycopg2-binary`（运行时用 `asyncpg`）
+   - `alembic/env.py` 优先读取 `DATABASE_URL` 环境变量，否则回退到 `alembic.ini`
+2. `uvicorn app.main:app --host 0.0.0.0 --port 8000`
+
+### 前端 Docker 架构说明
+
+Docker 模式下，前端由 `serve` 静态文件服务器托管（非 Vite dev server），因此没有反向代理功能。前端通过构建时注入的 `VITE_API_BASE` 直接请求后端：
+
+- **Docker 模式**：`VITE_API_BASE=http://localhost:8000/api`（`docker-compose.yml` 的 `build.args` 传入）
+- **Dev 模式**（`npm run dev`）：`VITE_API_BASE` 未设置，默认 `/api`，由 Vite proxy 转发
+
+```yaml
+# docker-compose.yml
+frontend:
+  build:
+    context: ./frontend
+    args:
+      VITE_API_BASE: http://localhost:8000/api
+    target: runner
 ```
 
 ---
@@ -157,6 +184,7 @@ pip install --upgrade fastapi
 | `uvicorn[standard]` | 0.30.0 | ASGI 服务器 |
 | `sqlalchemy` | 2.0 | ORM |
 | `asyncpg` | 0.30.0 | PostgreSQL 异步驱动 |
+| `psycopg2-binary` | 2.9.0 | PostgreSQL 同步驱动（Alembic 迁移用） |
 | `alembic` | 1.13.0 | 数据库迁移 |
 | `redis` | 5.1.0 | Redis 客户端 |
 | `pydantic` | 2.0 | 数据验证 |
@@ -244,6 +272,13 @@ psql -h localhost -U postgres -d ai_tool_site
 \d chat_sessions
 \d chat_messages
 \d tool_call_records
+\d agent_practice_records
+
+-- 查看练习记录
+SELECT * FROM agent_practice_records ORDER BY created_at DESC LIMIT 20;
+
+-- 统计各阶段的练习次数
+SELECT stage_key, COUNT(*) FROM agent_practice_records GROUP BY stage_key ORDER BY COUNT(*) DESC;
 
 -- 查看聊天会话数
 SELECT COUNT(*) FROM chat_sessions;
@@ -441,6 +476,8 @@ services:
   frontend:
     build:
       context: ./frontend
+      args:
+        VITE_API_BASE: https://your-domain.com/api
       target: runner
       dockerfile: Dockerfile
     restart: always
@@ -909,8 +946,45 @@ echo "=== 维护完成 ==="
 | `REDIS_URL` | redis://localhost:6379/0 | Redis 连接字符串 |
 | `BACKEND_PORT` | 8000 | 后端端口 |
 | `FRONTEND_PORT` | 5173 | 前端端口 |
+| `VITE_API_BASE` | `/api` | 前端 API 基础 URL（Docker 构建时设为 `http://localhost:8000/api`） |
 
 ---
 
 *Last updated: 2026-07-25*
 *Maintainer: EIA2024*
+
+---
+
+## 11. 已知问题
+
+### NavBar 链接路径与路由不匹配
+
+NavBar (`frontend/src/components/layout/NavBar.tsx`) 中的链接使用连字符风格：
+
+```tsx
+<Link to="/tools/blank-tool">Blank Tool</Link>
+```
+
+但 `App.tsx` 中的路由定义使用下划线：
+
+```tsx
+<Route path="/tools/blank_tool" element={<BlankToolPage />} />
+```
+
+浏览器打开 `/tools/blank-tool` 会显示 `No routes matched location`。修复合一即可。
+
+### Docker 模式下首次迁移失败
+
+如果首次 `docker compose up --build` 时后端日志出现 `alembic upgrade head` 错误，常见原因：
+
+1. `DATABASE_URL` 环境变量未正确设置 → 检查 `docker compose config`
+2. PostgreSQL 尚未就绪 → 检查 `docker compose ps postgres` 状态
+3. 缺少 `psycopg2-binary` → 确认 `pyproject.toml` 包含该依赖
+
+### 非 Docker 开发模式
+
+`npm run dev` 启动的 Vite dev server 自带 proxy，不需要 `VITE_API_BASE` 环境变量。如果前端无法连接后端，检查：
+
+1. 后端是否运行在 `localhost:8000`
+2. `vite.config.ts` 中的 proxy 配置是否正确
+3. 浏览器控制台是否有 CORS 错误

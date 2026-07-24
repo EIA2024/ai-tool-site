@@ -1,6 +1,6 @@
 import type { ApiResponse } from "../types";
 
-const BASE = "/api";
+const BASE = import.meta.env.VITE_API_BASE || "/api";
 
 export async function get<T = unknown>(path: string): Promise<ApiResponse<T>> {
   const res = await fetch(`${BASE}${path}`);

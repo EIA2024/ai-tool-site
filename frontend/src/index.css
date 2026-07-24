@@ -270,3 +270,336 @@ button:disabled {
   text-align: center;
   padding: 2rem;
 }
+
+/* ══ Code Agent Flow Visualizer ══ */
+
+.viz-page h2 {
+  margin-bottom: 0.15rem;
+}
+.viz-page > p {
+  margin-bottom: 1rem;
+}
+
+/* Notice banners */
+.viz-notice {
+  padding: 0.6rem 1rem;
+  border-radius: 0.5rem;
+  font-size: 0.85rem;
+  margin-bottom: 1rem;
+}
+.viz-notice-warn {
+  background: #3b2f0a;
+  color: var(--warning);
+  border: 1px solid #5c4a10;
+}
+.viz-notice-error {
+  background: #3b0a0a;
+  color: var(--error);
+  border: 1px solid #5c1010;
+}
+.viz-notice-success {
+  background: #0a3b1a;
+  color: var(--success);
+  border: 1px solid #105c20;
+}
+
+/* Stage navigator — horizontal flow */
+.viz-navigator {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0;
+  margin-bottom: 1.5rem;
+  padding: 1rem 0;
+  overflow-x: auto;
+}
+.viz-node-wrapper {
+  display: flex;
+  align-items: center;
+}
+.viz-node {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.3rem;
+  min-width: 90px;
+  max-width: 110px;
+  padding: 0.6rem 0.5rem;
+  border: 2px solid var(--border);
+  border-radius: 0.75rem;
+  background: var(--bg-card);
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+  text-align: center;
+  font-size: 0.75rem;
+  line-height: 1.2;
+  color: var(--text-dim);
+}
+.viz-node:hover {
+  border-color: var(--accent);
+  color: var(--text);
+}
+.viz-node-active {
+  border-color: var(--accent);
+  background: rgba(99, 102, 241, 0.1);
+  color: var(--text);
+}
+.viz-node-num {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: var(--accent);
+  color: #fff;
+  font-weight: 700;
+  font-size: 0.75rem;
+}
+.viz-node-active .viz-node-num {
+  background: var(--accent-hover);
+}
+.viz-node-label {
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  word-break: break-word;
+}
+.viz-connector {
+  width: 20px;
+  height: 2px;
+  background: var(--border);
+  flex-shrink: 0;
+}
+
+/* Detail panel */
+.viz-detail-panel {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 0.75rem;
+  padding: 1.25rem;
+  margin-bottom: 1.5rem;
+}
+.viz-detail-panel h3 {
+  font-size: 1.2rem;
+  margin-bottom: 1rem;
+  color: var(--accent-hover);
+}
+.viz-detail-panel section {
+  margin-bottom: 1rem;
+}
+.viz-detail-panel h4 {
+  font-size: 0.95rem;
+  font-weight: 600;
+  margin-bottom: 0.4rem;
+  color: var(--text);
+}
+.viz-detail-panel ul {
+  padding-left: 1.25rem;
+  color: var(--text-dim);
+  font-size: 0.85rem;
+}
+.viz-detail-panel li {
+  margin-bottom: 0.25rem;
+}
+.viz-detail-panel .viz-template-box {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+  padding: 0.75rem 1rem;
+  font-family: "Fira Code", "Consolas", monospace;
+  font-size: 0.8rem;
+  white-space: pre-wrap;
+  margin-bottom: 0.5rem;
+  line-height: 1.6;
+}
+.viz-template-box .viz-var {
+  background: rgba(99, 102, 241, 0.2);
+  color: var(--accent-hover);
+  padding: 0.05rem 0.3rem;
+  border-radius: 0.2rem;
+  font-size: 0.75rem;
+}
+.viz-var-legend {
+  font-size: 0.8rem;
+  color: var(--text-dim);
+  margin-bottom: 0.5rem;
+}
+.viz-var-legend .viz-var {
+  background: rgba(99, 102, 241, 0.2);
+  color: var(--accent-hover);
+  padding: 0.05rem 0.3rem;
+  border-radius: 0.2rem;
+  margin-right: 0.3rem;
+  font-size: 0.8rem;
+}
+.viz-copy-btn {
+  padding: 0.35rem 0.85rem;
+  font-size: 0.8rem;
+  background: var(--border);
+  color: var(--text);
+  border-radius: 0.35rem;
+  border: 1px solid transparent;
+  cursor: pointer;
+  transition: border-color 0.15s;
+}
+.viz-copy-btn:hover {
+  border-color: var(--accent);
+}
+.viz-checklist label {
+  cursor: pointer;
+  display: inline;
+}
+.viz-check-list input[type="checkbox"] {
+  margin-right: 0.4rem;
+}
+.viz-errors li {
+  color: var(--error);
+}
+
+/* Form */
+.viz-form-section {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 0.75rem;
+  padding: 1.25rem;
+  margin-bottom: 1.5rem;
+}
+.viz-form-section h3 {
+  font-size: 1.1rem;
+  margin-bottom: 1rem;
+}
+.viz-form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  margin-bottom: 1rem;
+}
+.viz-form label {
+  display: flex;
+  flex-direction: column;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--text-dim);
+  gap: 0.3rem;
+}
+.viz-form textarea {
+  padding: 0.6rem 0.8rem;
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+  background: var(--bg);
+  color: var(--text);
+  font-size: 0.85rem;
+  font-family: inherit;
+  resize: vertical;
+}
+.viz-form textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+.viz-form textarea::placeholder {
+  color: var(--text-dim);
+  opacity: 0.6;
+}
+
+/* Action buttons row */
+.viz-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-bottom: 0.75rem;
+}
+.viz-btn-secondary {
+  background: var(--border) !important;
+  color: var(--text) !important;
+}
+.viz-btn-secondary:hover {
+  background: #333850 !important;
+}
+
+/* Summary box */
+.viz-summary-box {
+  background: var(--bg);
+  border: 1px solid var(--accent);
+  border-radius: 0.5rem;
+  padding: 1rem;
+  margin-top: 0.5rem;
+}
+.viz-summary-box h4 {
+  font-size: 0.9rem;
+  margin-bottom: 0.5rem;
+  color: var(--accent-hover);
+}
+.viz-summary-box pre {
+  white-space: pre-wrap;
+  font-family: "Fira Code", "Consolas", monospace;
+  font-size: 0.8rem;
+  line-height: 1.5;
+  margin-bottom: 0.5rem;
+}
+
+/* History list */
+.viz-history-section {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 0.75rem;
+  padding: 1.25rem;
+  margin-bottom: 1.5rem;
+}
+.viz-history-section h3 {
+  font-size: 1.1rem;
+  margin-bottom: 1rem;
+}
+.viz-history-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  max-height: 500px;
+  overflow-y: auto;
+}
+.viz-history-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  padding: 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+  font-size: 0.8rem;
+  position: relative;
+}
+.viz-history-meta {
+  flex: 1;
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 0.25rem;
+  font-size: 0.85rem;
+}
+.viz-history-date {
+  color: var(--text-dim);
+  font-size: 0.75rem;
+}
+.viz-history-preview {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  color: var(--text-dim);
+  font-size: 0.78rem;
+  flex: 2;
+}
+.viz-delete-btn {
+  background: transparent !important;
+  color: var(--text-dim) !important;
+  padding: 0.2rem 0.4rem !important;
+  font-size: 0.8rem !important;
+  min-width: auto !important;
+  border: 1px solid transparent !important;
+  border-radius: 0.25rem !important;
+  cursor: pointer;
+  position: absolute;
+  top: 0.5rem;
+  right: 0.5rem;
+}
+.viz-delete-btn:hover {
+  color: var(--error) !important;
+  border-color: var(--error) !important;
+}

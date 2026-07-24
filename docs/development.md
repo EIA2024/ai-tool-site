@@ -7,6 +7,11 @@
 │   Frontend           │◄────────────────────────►│   Backend            │
 │   React + Vite + TS  │                          │   Python + FastAPI   │
 │   Port 5173          │                          │   Port 8000          │
+│                      │                          │                      │
+│   API base:          │                          │                      │
+│   Dev: Vite proxy    │                          │                      │
+│   Docker: direct     │                          │                      │
+│   VITE_API_BASE      │                          │                      │
 └──────────────────────┘                          └──────┬───────────────┘
                                                          │
                                            ┌─────────────┴─────────────┐
@@ -70,6 +75,16 @@ npm run dev
 
 The Vite dev server proxies `/api`, `/ws`, and `/sse` to the backend at `localhost:8000`.
 
+> **Docker 模式**下，前端由 `serve` 静态服务器托管（无 proxy）。需在构建时通过 `VITE_API_BASE` 指定后端地址：
+> ```yaml
+> # docker-compose.yml
+> frontend:
+>   build:
+>     args:
+>       VITE_API_BASE: http://localhost:8000/api
+> ```
+> `lib/api.ts` 中 `BASE = import.meta.env.VITE_API_BASE || "/api"`，Dev 模式默认使用 Vite proxy。
+
 ### Database
 
 Ensure PostgreSQL and Redis are running locally or via Docker:
@@ -83,10 +98,11 @@ docker compose up postgres redis
 
 - [ ] **AC-1**: Open http://localhost:5173 → tool list loads → click "Blank Tool" → enter text → submit → see echo response
 - [ ] **AC-2**: Open http://localhost:5173 → click "Chat Tool" → click Connect → send message → receive echo reply
-- [ ] **AC-3**: Create a new file `backend/app/tools/modules/my_tool.py` extending `BaseTool` → register in `registry.py` → tool appears in the list
-- [ ] **AC-4**: Send chat messages → restart backend → reconnect → messages are persisted (check via API)
-- [ ] **AC-5**: `docker compose up --build` starts all four services successfully
-- [ ] **AC-6**: In non-Docker mode, Vite proxy handles both REST (`/api/tools`) and WebSocket (`/ws/chat`)
+- [ ] **AC-3**: Open http://localhost:5173 → "Code Agent Flow Visualizer" appears → click → 9 stages navigable → save a record → persists after refresh
+- [ ] **AC-4**: Create a new file `backend/app/tools/modules/my_tool.py` extending `BaseTool` → register in `registry.py` → tool appears in the list
+- [ ] **AC-5**: Send chat messages → restart backend → reconnect → messages are persisted (check via API)
+- [ ] **AC-6**: `docker compose up --build` starts all four services successfully and backend runs `alembic upgrade head`
+- [ ] **AC-7**: In non-Docker mode, Vite proxy handles both REST (`/api/tools`) and WebSocket (`/ws/chat`)
 
 ## Project Structure
 
@@ -147,3 +163,23 @@ tool_registry.register(MyTool())
 ```
 
 3. (Optional) Add a frontend page at `frontend/src/pages/tools/MyToolPage.tsx` and update `App.tsx` routes.
+4. (Optional, database-backed tools) Add a new model in `backend/app/models/__init__.py`, create an Alembic migration:
+
+```bash
+cd backend
+alembic revision -m "add my_tool_records"
+# Write migration by hand (see 002_add_agent_practice_records.py as example)
+alembic upgrade head
+```
+
+> **注意**：如果工具需要数据库持久化，后端 `handle_invoke` 中要 catch 所有异常并返回结构化错误，避免未捕获异常导致 500。参考 `code_agent_flow_viz.py` 的 action dispatch 模式。
+>
+> **Docker 模式**：后端容器启动时自动运行 `alembic upgrade head`。前端容器通过构建参数 `VITE_API_BASE=http://localhost:8000/api` 直接请求后端。Dev 模式下通过 Vite proxy 转发。（非 Docker 开发模式无需额外配置。）
+
+### 真实案例参考
+
+[Code Agent Flow Visualizer](.agent-workspace/workflows/WF-20260725-code-agent-viz-4B9F) 是一个完整的数据库持久化工具案例，包含：
+
+- **后端**：`AgentPracticeRecord` 模型 → Alembic 迁移 → CRUD 服务 → 工具模块（action dispatch）
+- **前端**：TypeScript 类型扩展 → 全功能页面（表单/历史/导出/导入）→ 路由注册
+- **约束**：`tool_id = "code_agent_flow_viz"`，`mode = "request-response"`，所有 CRUD 通过单一 invoke 端点

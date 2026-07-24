@@ -1,6 +1,7 @@
 from app.tools.base import BaseTool
 from app.tools.modules.blank_tool import BlankTool
 from app.tools.modules.chat_tool import ChatTool
+from app.tools.modules.code_agent_flow_viz import CodeAgentFlowVizTool
 
 
 class ToolRegistry:
@@ -22,3 +23,4 @@ tool_registry = ToolRegistry()
 # Register built-in example modules
 tool_registry.register(BlankTool())
 tool_registry.register(ChatTool())
+tool_registry.register(CodeAgentFlowVizTool())

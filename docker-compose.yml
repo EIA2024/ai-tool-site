@@ -48,6 +48,8 @@ services:
   frontend:
     build:
       context: ./frontend
+      args:
+        VITE_API_BASE: http://localhost:8000/api
       target: runner
       dockerfile: Dockerfile
     ports:
