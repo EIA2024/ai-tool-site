@@ -1,3 +1,4 @@
+import os
 from logging.config import fileConfig
 
 from sqlalchemy import engine_from_config, pool
@@ -11,8 +12,8 @@ if config.config_file_name is not None:
 
 target_metadata = Base.metadata
 
-# Strip +asyncpg for Alembic's synchronous engine
-db_url = config.get_main_option("sqlalchemy.url", "")
+# Use DATABASE_URL env var if set (Docker), otherwise fall back to alembic.ini
+db_url = os.environ.get("DATABASE_URL") or config.get_main_option("sqlalchemy.url", "")
 if db_url.startswith("postgresql+asyncpg://"):
     db_url = db_url.replace("postgresql+asyncpg://", "postgresql://", 1)
 
