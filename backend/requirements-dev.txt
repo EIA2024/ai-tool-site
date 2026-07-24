@@ -1,0 +1,4 @@
+# AI Tool Site — Backend (Dev requirements)
+
+-e .
+uvicorn[standard]
