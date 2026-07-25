@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { Link } from "react-router-dom";
 import { post } from "../../lib/api";
 import type {
   ListRecordsData,
@@ -13,271 +14,290 @@ const STAGES: StageDefinition[] = [
   {
     key: "goal_setting",
     number: 1,
-    title: "Goal Setting & Task Decomposition",
+    title: "Goal Setting",
+    hint: "Clarify what you want the agent to accomplish",
     goals: [
-      "Clearly define what you want the Coding Agent to accomplish",
-      "Break the goal into small, testable sub-tasks",
-      "Prioritize tasks and identify dependencies",
+      "Articulate what you want to build or change",
+      "Define success criteria before starting",
+      "Separate must-haves from nice-to-haves",
     ],
     promptTemplate:
-      "I need to {task}. Please help me break this down into actionable steps.\n\nConstraints:\n- {constraints}\n\nExpected outcome:\n- {outcome}",
-    variables: ["task", "constraints", "outcome"],
+      "I need help with the following:\n\n{task}\n\nBefore we start, please ask me clarifying questions about:\n- What I'm trying to accomplish\n- What success looks like\n- What's out of scope for now\n\nThen help me break this into actionable steps with clear acceptance criteria.",
+    promptTemplateZh:
+      "我需要做以下事情：\n\n{task}\n\n在开始之前，请先向我提澄清问题：\n- 我到底要达成什么\n- 怎样才算完成\n- 哪些暂时不做\n\n然后帮我拆解成可执行的小步，每步有明确的验收标准。",
+    variables: ["task"],
     checklist: [
-      "Goal is specific and measurable",
-      "Sub-tasks are independent where possible",
-      "Priority order is clear",
+      "目标具体且可衡量，避免模糊表述",
+      "完成与否有明确的判定标准",
+      "不纳入范围的需求已清晰界定",
+      "工作量适合在一轮会话内完成",
     ],
     commonErrors: [
-      "Goal too vague — agent produces unfocused output",
-      "Too many tasks at once — exceeds context window",
+      "将多个不相关的目标混杂在同一个任务中",
+      "未定义明确的完成标准",
+      "需求描述过于模糊，导致 Agent 依赖猜测进行实现",
     ],
     completionCriteria: [
-      "A list of 3–7 concrete sub-tasks",
-      "Each sub-task has a clear definition of done",
+      "目标变更或构建的内容已明确表述",
+      "成功标准具备可验证性",
+      "范围的边界已清晰界定",
     ],
   },
   {
-    key: "context_gathering",
+    key: "context_research",
     number: 2,
-    title: "Context Gathering",
+    title: "Context & Research",
+    hint: "Read-only survey — understand before changing",
     goals: [
-      "Provide all relevant background information",
-      "Share codebase structure, file paths, and conventions",
-      "Include examples of expected input/output",
+      "Survey the codebase before making changes",
+      "Identify relevant files, patterns, and dependencies",
+      "Surface risks before writing code",
     ],
     promptTemplate:
-      "Here is the relevant context:\n\nProject structure:\n{project_structure}\n\nKey files:\n{key_files}\n\nCurrent state:\n{current_state}\n\n{additional_context}",
-    variables: ["project_structure", "key_files", "current_state", "additional_context"],
+      "Please do a read-only survey of the project. Do not modify any files.\n\nI want to work on: {topic}\n\nRead the relevant areas of the codebase and report:\n1. Relevant files you found and what each does\n2. How things currently work\n3. Existing patterns and conventions to follow\n4. Risks and uncertainties\n5. Your recommended approach with file-level scope\n\nAll conclusions must reference file paths or command output.",
+    promptTemplateZh:
+      "请对项目进行只读调查，不要修改任何文件。\n\n待处理事项：{topic}\n\n请阅读代码库的相关模块，并提供以下报告：\n1. 发现了哪些相关文件及其各自的作用\n2. 当前实现方式\n3. 可复用的设计模式与编码规范\n4. 潜在风险与不确定因素\n5. 建议的方案及涉及的文件范围\n\n所有结论须附上文件路径或命令输出作为依据。",
+    variables: ["topic"],
     checklist: [
-      "All relevant file paths are included",
-      "Existing patterns and conventions are described",
-      "Error messages or logs are attached if relevant",
+      "调查过程中未修改任何文件",
+      "结论均有文件路径或命令输出作为依据",
+      "已识别并记录潜在风险",
+      "调查范围未无限制扩展",
     ],
     commonErrors: [
-      "Too little context — agent makes wrong assumptions",
-      "Irrelevant context — wastes tokens and confuses the agent",
+      "跳过调查环节，直接进入编码阶段",
+      "仅阅读入口文件而未追踪完整调用链路",
+      "采用「先写再看」的方式而非先充分理解",
     ],
     completionCriteria: [
-      "Agent can answer basic questions about the codebase",
-      "No obvious gaps in the provided context",
+      "明确知晓需要修改哪些文件",
+      "明确知晓不应修改哪些文件",
+      "对当前状态的理解有充分的证据支撑",
     ],
   },
   {
-    key: "solution_design",
+    key: "task_specification",
     number: 3,
-    title: "Solution Design",
+    title: "Task Specification",
+    hint: "Turn intent into a verifiable contract",
     goals: [
-      "Design the architecture or approach before coding",
-      "Evaluate trade-offs between different solutions",
-      "Get agent feedback on the proposed design",
+      "Write a spec that another agent could execute",
+      "Make requirements unambiguous and testable",
+      "Define constraints based on project reality",
     ],
     promptTemplate:
-      "I need to design a solution for {problem}.\n\nRequirements:\n- {requirement_1}\n- {requirement_2}\n\nConstraints:\n- {constraints}\n\nPlease propose 2–3 approaches with trade-offs.",
-    variables: ["problem", "requirement_1", "requirement_2", "constraints"],
+      "Based on what we've discussed and what you found in the codebase, help me write a clear task specification.\n\nThe goal is: {goal}\n\nFrom your research you know:\n- The project structure\n- Existing patterns and conventions\n- Relevant files\n\nPlease produce a spec with:\n- Goal (verifiable outcome)\n- Context (with file evidence)\n- Constraints (what not to touch)\n- Done when (checkable items)\n\nFlag any places where the spec is still ambiguous.",
+    promptTemplateZh:
+      "基于我们讨论的内容和你对代码库的调查，帮我写一份清晰的任务规格。\n\n目标是：{goal}\n\n从调查中你已经知道：\n- 项目结构\n- 现有模式和约定\n- 相关文件\n\n请输出包含以下内容的规格：\n- 目标（可验证的结果）\n- 上下文（附文件证据）\n- 约束条件（不能动什么）\n- 完成标准（可检查的条目）\n\n标出规格中仍然模糊的地方。",
+    variables: ["goal"],
     checklist: [
-      "At least 2 alternative approaches considered",
-      "Trade-offs are documented",
-      "Design aligns with existing architecture",
+      "目标描述的是结果而非动作",
+      "上下文信息附有文件层面的证据",
+      "约束条件具有清晰的边界",
+      "完成标准可客观验证，不依赖主观判断",
     ],
     commonErrors: [
-      "Jumping straight to code without design",
-      "Over-engineering — solving problems that don't exist yet",
+      "将愿望清单误作为任务规格",
+      "未定义验收标准",
+      "让 Agent 自行揣摩「足够好」的标准",
     ],
     completionCriteria: [
-      "A clear design decision with rationale",
-      "Implementation plan for the chosen approach",
+      "该规格可直接交由另一个 Agent 执行",
+      "阅读者能够明确知晓应做与不应做之事",
+    ],
+  },
+  {
+    key: "solution_planning",
+    number: 4,
+    title: "Solution Design & Planning",
+    hint: "Design first, then plan the steps",
+    goals: [
+      "Evaluate alternative approaches before committing",
+      "Break the work into small, ordered steps",
+      "Identify risks early",
+    ],
+    promptTemplate:
+      "Design a solution and create an implementation plan.\n\nRequirements:\n- {requirement_1}\n- {requirement_2}\n\nPropose 2-3 approaches with trade-offs. For the chosen approach:\n\nList every file to create or modify with:\n- What changes and why\n- Order of work\n- Risks and mitigation\n- How to verify each step\n\nDo not write code yet. Wait for my approval on the plan.",
+    promptTemplateZh:
+      "设计方案并制定实施计划。\n\n需求：\n- {requirement_1}\n- {requirement_2}\n\n请提出 2-3 种方案并比较优劣。对于选中的方案：\n\n列出每个要创建或修改的文件：\n- 改什么以及为什么改\n- 执行顺序\n- 风险与应对\n- 每步如何验证\n\n暂时不要写代码，等我确认计划。",
+    variables: ["requirement_1", "requirement_2"],
+    checklist: [
+      "至少评估了两种候选方案",
+      "各方案的优劣对比已记录在案",
+      "计划可按步执行、循序渐进",
+      "每个步骤均附带验证手段",
+    ],
+    commonErrors: [
+      "计划规模过大，超出单轮会话的承载能力",
+      "修改内容与验证方式未明确说明",
+      "引入了范围之外的功能模块（如数据库、API 等）",
+    ],
+    completionCriteria: [
+      "你理解每个步骤并认同执行次序",
+      "你有能力识别并拒绝过度扩展的计划",
+      "第一步足够小，可以立即着手实施",
     ],
   },
   {
     key: "implementation",
-    number: 4,
-    title: "Implementation (Coding)",
+    number: 5,
+    title: "Implementation",
+    hint: "Build a working version — one step at a time",
     goals: [
-      "Write clean, maintainable code",
-      "Follow project conventions and style guide",
-      "Include error handling and logging",
+      "Write clean code following project conventions",
+      "Make minimal, focused changes per step",
+      "Keep the codebase working at each step",
     ],
     promptTemplate:
-      "Please implement {feature} following these specifications:\n\nDesign:\n{design}\n\nFile to modify:\n{file_path}\n\nConventions:\n- Use {language} with {framework}\n- Follow existing patterns in {reference_file}\n- Add error handling for edge cases",
-    variables: ["feature", "design", "file_path", "language", "framework", "reference_file"],
+      "Implement the approved plan. \n\nCurrent step: {step_description}\n\nRules:\n- Read the existing files first to match conventions\n- Make minimal changes — only what the plan specifies\n- Do not add features beyond scope\n- Keep the project runnable after each change\n- If you encounter an uncertainty, flag it rather than guessing\n\nAfter implementing, summarize:\n1. What you changed and why\n2. How to verify\n3. What's left for the next step",
+    promptTemplateZh:
+      "按已确认的计划实现。\n\n当前步骤：{step_description}\n\n规则：\n- 先读现有文件，遵循项目约定\n- 做最小改动——只改计划指定的内容\n- 不添加计划外的功能\n- 每次改动后保持项目可运行\n- 遇到不确定的地方先标出来，不要猜测\n\n实现完成后总结：\n1. 改了哪些文件以及为什么改\n2. 如何验证\n3. 下一步还剩什么",
+    variables: ["step_description"],
     checklist: [
-      "Code compiles without errors",
-      "Follows project style guide",
-      "Includes appropriate error handling",
-      "No debug code or console.log leftovers",
+      "每次仅推进一个步骤",
+      "每个修改均有充分的理由",
+      "未超出既定范围",
+      "改动结果可立即预览或测试",
     ],
     commonErrors: [
-      "Not following existing patterns — inconsistent code style",
-      "Missing edge case handling",
-      "Overly complex solution for a simple problem",
+      "在实现过程中随意添加额外功能",
+      "为微小改进引入了重量级依赖",
+      "未经验证即宣称完成",
     ],
     completionCriteria: [
-      "Code compiles and passes linting",
-      "All sub-tasks from the design are addressed",
+      "当前步骤已完成并通过验证",
+      "下一步的执行内容已明确",
     ],
   },
   {
-    key: "testing_debugging",
-    number: 5,
-    title: "Testing & Debugging",
+    key: "testing_validation",
+    number: 6,
+    title: "Testing & Validation",
+    hint: "Prove it works with evidence",
     goals: [
-      "Write tests for the new functionality",
-      "Verify existing tests still pass",
-      "Debug any failures systematically",
+      "Write tests that validate the changes",
+      "Verify edge cases are handled",
+      "Confirm existing functionality still works",
     ],
     promptTemplate:
-      "Please write tests for {component}.\n\nTest requirements:\n- {test_requirement_1}\n- {test_requirement_2}\n\nEdge cases to cover:\n- {edge_case_1}\n- {edge_case_2}\n\nTesting framework: {test_framework}",
-    variables: [
-      "component",
-      "test_requirement_1",
-      "test_requirement_2",
-      "edge_case_1",
-      "edge_case_2",
-      "test_framework",
-    ],
+      "Write tests for the changes made. \n\nYou know:\n- What changed (from the implementation)\n- The test framework used in this project (read it from config)\n- Existing test patterns (read existing tests)\n\nCover:\n- The happy path\n- Edge cases: {edge_cases}\n- Error handling\n\nThen run the test suite and report results. If tests fail, fix and retry.\n\nFinally, confirm: does the implementation meet the 'Done when' from the spec?",
+    promptTemplateZh:
+      "为刚才的改动编写测试。\n\n你已经知道：\n- 改了什么（从实现步骤中可知）\n- 项目用的测试框架（从配置文件读取）\n- 现有的测试模式（读取现有测试文件）\n\n覆盖：\n- 正常路径\n- 边界情况：{edge_cases}\n- 错误处理\n\n然后运行测试并报告结果。如果测试失败，修复后重试。\n\n最后确认：实现是否满足规格中的「完成标准」？",
+    variables: ["edge_cases"],
     checklist: [
-      "Happy path is covered",
-      "Error/edge cases are covered",
-      "Tests are deterministic (no flaky tests)",
-      "Existing tests still pass",
+      "正常流程已覆盖",
+      "边界条件已覆盖",
+      "测试结果稳定可靠，不存在偶发失败",
+      "既有测试仍全部通过",
     ],
     commonErrors: [
-      "Testing implementation details instead of behavior",
-      "Missing negative test cases",
-      "Flaky tests due to shared state or timing",
+      "测试针对的是实现细节而非外部行为",
+      "缺少反面用例（应明确验证系统拒绝了什么）",
+      "测试因共享状态或时序问题而产生不稳定性",
     ],
     completionCriteria: [
-      "Test coverage for the new code is adequate",
-      "All tests pass consistently",
+      "测试覆盖程度对当前改动而言足够充分",
+      "所有测试一致通过",
+      "功能经验证确实可用",
     ],
   },
   {
     key: "code_review",
-    number: 6,
+    number: 7,
     title: "Code Review",
+    hint: "Check the diff carefully before accepting",
     goals: [
-      "Review the agent-generated code for quality",
-      "Check for security issues and performance concerns",
-      "Verify adherence to project standards",
+      "Review every line changed in this session",
+      "Catch security issues, regressions, and design problems",
+      "Ensure nothing unrelated was modified",
     ],
     promptTemplate:
-      "Please review the following code changes:\n\nFiles changed:\n{files_changed}\n\nDiff:\n{diff}\n\nFocus on:\n- Correctness\n- Security vulnerabilities\n- Performance\n- Adherence to {coding_standards}",
-    variables: ["files_changed", "diff", "coding_standards"],
+      "Review all changes from this session.\n\nGenerate the diff and list changed files:\n- Run `git diff` to see every change\n- Run `git diff --stat` for the summary\n\nCheck each change for:\n1. Does it meet the original goal?\n2. Are there any unrelated changes?\n3. Any security vulnerabilities?\n4. Any performance concerns?\n5. Does it follow the project's conventions?\n\nFor each issue found, provide the file:line reference.\nRank issues by severity.",
+    promptTemplateZh:
+      "审查本轮所有改动。\n\n生成 diff 并列出改动的文件：\n- 运行 `git diff` 查看每个改动\n- 运行 `git diff --stat` 查看汇总\n\n逐条检查：\n1. 是否满足最初的目标？\n2. 有没有无关的改动？\n3. 是否有安全漏洞？\n4. 是否有性能问题？\n5. 是否遵循项目约定？\n\n每个问题附上文件:行号引用，按严重程度排序。",
+    variables: [],
     checklist: [
-      "No security vulnerabilities introduced",
-      "No performance regressions",
-      "Code is readable and well-structured",
-      "No unnecessary dependencies",
+      "每个修改均有合理的解释",
+      "未涉及无关文件",
+      "未引入重型依赖",
+      "问题已按严重程度排序",
     ],
     commonErrors: [
-      "Rubber-stamping without actually reviewing",
-      "Missing subtle logic errors in large diffs",
+      "仅关注最终效果而未审查实际 diff",
+      "将个人风格偏好与真正的缺陷混为一谈",
+      "发现缺陷但未记录以供后续跟进",
     ],
     completionCriteria: [
-      "All review comments are resolved",
-      "Code meets the team's quality bar",
+      "明确哪些改动应当保留",
+      "明确哪些改动需要返工",
+      "下一步的修改范围已界定清楚",
     ],
   },
   {
-    key: "documentation",
-    number: 7,
-    title: "Documentation",
+    key: "documentation_commit",
+    number: 8,
+    title: "Documentation & Commit",
+    hint: "Package the result for your future self",
     goals: [
       "Document what was built and why",
-      "Update README, API docs, or inline comments",
-      "Include usage examples for other developers",
+      "Write a clear commit message for the changes",
+      "Record verification results and known limitations",
     ],
     promptTemplate:
-      "Please document {feature}.\n\nContext:\n- What it does: {description}\n- Why it was built: {rationale}\n- How to use: {usage}\n\nFormat: {doc_format}\n\nInclude:\n- API reference\n- Code examples\n- Configuration options",
-    variables: ["feature", "description", "rationale", "usage", "doc_format"],
+      "Prepare the deliverables for this session.\n\nYou know:\n- What changed (from git diff)\n- Why it changed (from the goal and plan)\n- How it was verified (from testing)\n\nPlease produce:\n1. A concise commit title\n2. Summary of changes (bullet points, file-level)\n3. Verification results\n4. Known limitations or risks\n5. Suggested next steps\n\nAlso update any README or docs if the changes affect how the project is used.",
+    promptTemplateZh:
+      "准备本轮的交付物。\n\n你已经知道：\n- 改了什么（从 git diff 可知）\n- 为什么改（从目标和计划可知）\n- 如何验证的（从测试阶段可知）\n\n请输出：\n1. 简洁的提交标题\n2. 改动摘要（要点式，按文件列出）\n3. 验证结果\n4. 已知限制或风险\n5. 下一步建议\n\n如果改动了项目使用方式，同步更新 README 或文档。",
+    variables: [],
     checklist: [
-      "Purpose is clearly explained",
-      "Usage examples are runnable",
-      "Configuration options are documented",
+      "提交信息具备独立可读性，无需额外上下文即可理解",
+      "验证结果已包含在提交内容中",
+      "已知的限制与风险已如实记录",
+      "标题未夸大成果范围",
     ],
     commonErrors: [
-      "Documenting what instead of why",
-      "Outdated docs after code changes",
-      "Missing setup or prerequisite steps",
+      "将未完成的工作标记为已完成",
+      "提交信息仅有一行，缺乏必要的上下文",
+      "未记录潜在风险与已知问题",
     ],
     completionCriteria: [
-      "A developer new to the feature can use it from the docs",
+      "提交信息完整说明了改动的背景与内容",
+      "下一轮可以从当前状态无缝衔接继续工作",
+      "当前状态不存在模糊之处",
     ],
   },
   {
-    key: "deployment_release",
-    number: 8,
-    title: "Deployment & Release",
-    goals: [
-      "Prepare the changes for deployment",
-      "Write release notes or changelog entries",
-      "Verify the deployment process",
-    ],
-    promptTemplate:
-      "Please help me prepare the release for {version}.\n\nChanges included:\n{changes}\n\nDeployment target:\n{target}\n\nRollback plan:\n{rollback_plan}\n\nChecklist:\n- Database migrations: {migrations}\n- Environment variables: {env_vars}\n- Breaking changes: {breaking_changes}",
-    variables: [
-      "version",
-      "changes",
-      "target",
-      "rollback_plan",
-      "migrations",
-      "env_vars",
-      "breaking_changes",
-    ],
-    checklist: [
-      "Database migrations are reversible",
-      "Release notes are accurate",
-      "Rollback plan is in place",
-      "Smoke tests pass on staging",
-    ],
-    commonErrors: [
-      "Forgetting to document breaking changes",
-      "Missing environment variable updates",
-    ],
-    completionCriteria: [
-      "Release is deployed to target environment",
-      "Smoke tests pass in production",
-    ],
-  },
-  {
-    key: "reflection_iteration",
+    key: "reflection_retro",
     number: 9,
-    title: "Reflection & Iteration",
+    title: "Reflection & Retro",
+    hint: "Turn this session into reusable skill",
     goals: [
-      "Review what worked well and what didn't",
-      "Identify improvements for the next iteration",
-      "Update prompt strategies based on experience",
+      "Review what worked and what didn't in the collaboration",
+      "Distill reusable prompt patterns",
+      "Identify one thing to improve next session",
     ],
     promptTemplate:
-      "Let me reflect on this Coding Agent session.\n\nWhat went well:\n{went_well}\n\nWhat could be improved:\n{improvements}\n\nPrompt adjustments for next time:\n{prompt_adjustments}\n\nKey takeaways:\n{takeaways}",
-    variables: ["went_well", "improvements", "prompt_adjustments", "takeaways"],
+      "Let's reflect on this session together.\n\nI'll share:\n- What I think went well: {went_well}\n- What could be improved: {improvements}\n- Whether the output met my expectations: {outcome}\n\nYou share:\n- Which parts of my instructions were clearest\n- Where you needed more context\n- What I should prepare differently next time\n\nTogether, distill:\n1. One prompt pattern to repeat\n2. One thing to do differently next session\n3. A small next-step task to start the next session",
+    promptTemplateZh:
+      "一起复盘这一轮协作。\n\n我来分享：\n- 我觉得做得好的地方：{went_well}\n- 可以改进的地方：{improvements}\n- 输出是否符合我的预期：{outcome}\n\n你来回馈：\n- 我哪部分指令表达得最清楚\n- 哪里缺上下文让你困惑\n- 下次我该提前准备什么\n\n共同提炼：\n1. 一条值得复用的提示词模式\n2. 下一次要改变的一个做法\n3. 下一轮可以开始的一个小任务",
+    variables: ["went_well", "improvements", "outcome"],
     checklist: [
-      "Honest assessment of agent performance",
-      "Concrete prompt improvements identified",
-      "Patterns to repeat are captured",
+      "区分表达层面的问题与实现层面的问题",
+      "提炼可复用的模式而非一次性观察",
+      "下一步任务足够小，可以立即着手",
+      "不归咎于 Agent，聚焦于自身可控的改进",
     ],
     commonErrors: [
-      "Skipping reflection — missing learning opportunity",
-      "Vague takeaways that don't lead to action",
+      "仅总结功能产出，未总结协作模式",
+      "未记录有效的提示词模式以供复用",
+      "下一轮的任务规模与当前轮相当，缺乏递进",
     ],
     completionCriteria: [
-      "List of actionable improvements for the next session",
-      "Updated prompt templates based on lessons learned",
+      "提炼出一条可复用的表达规范",
+      "产出一个足够小的下一步任务",
+      "学习记录已保存，可供后续回顾参考",
     ],
   },
 ];
-
-/* ── Helper: render stage variables as highlighted spans ── */
-
-function renderTemplate(template: string, variables: string[]): string {
-  let result = template;
-  for (const v of variables) {
-    const placeholder = `{${v}}`;
-    const regex = new RegExp(placeholder.replace(/{/g, "\\{").replace(/}/g, "\\}"), "g");
-    result = result.replace(regex, `<span class="viz-var">${placeholder}</span>`);
-  }
-  return result;
-}
 
 /* ── Component ── */
 
@@ -290,6 +310,7 @@ export default function CodeAgentFlowVizPage() {
   const [records, setRecords] = useState<PracticeRecord[]>([]);
   const [summary, setSummary] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  const [copiedZh, setCopiedZh] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [backendOk, setBackendOk] = useState(true);
   const [importing, setImporting] = useState(false);
@@ -330,9 +351,9 @@ export default function CodeAgentFlowVizPage() {
         next_steps: nextSteps,
       });
       if (res.success && res.data) {
-        const data = res.data;
-        if (data.created) {
-          setRecords((prev) => [data.record, ...prev]);
+        const d = res.data;
+        if (d.created) {
+          setRecords((prev) => [d.record, ...prev]);
         }
         setBackendOk(true);
       } else {
@@ -391,7 +412,6 @@ export default function CodeAgentFlowVizPage() {
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     } catch {
-      // Fallback for non-HTTPS contexts
       const textarea = document.createElement("textarea");
       textarea.value = selectedStage.promptTemplate;
       document.body.appendChild(textarea);
@@ -400,6 +420,23 @@ export default function CodeAgentFlowVizPage() {
       document.body.removeChild(textarea);
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
+    }
+  };
+
+  const handleCopyPromptZh = async () => {
+    try {
+      await navigator.clipboard.writeText(selectedStage.promptTemplateZh);
+      setCopiedZh(true);
+      setTimeout(() => setCopiedZh(false), 2000);
+    } catch {
+      const textarea = document.createElement("textarea");
+      textarea.value = selectedStage.promptTemplateZh;
+      document.body.appendChild(textarea);
+      textarea.select();
+      document.execCommand("copy");
+      document.body.removeChild(textarea);
+      setCopiedZh(true);
+      setTimeout(() => setCopiedZh(false), 2000);
     }
   };
 
@@ -494,8 +531,8 @@ export default function CodeAgentFlowVizPage() {
           next_steps: String(rec.next_steps ?? ""),
         });
         if (res.success && res.data) {
-          const data = res.data;
-          if (data.created) {
+          const d = res.data;
+          if (d.created) {
             createdCount++;
           } else {
             skippedCount++;
@@ -508,246 +545,287 @@ export default function CodeAgentFlowVizPage() {
 
     setImporting(false);
     setImportResult(`Imported: ${createdCount} new, ${skippedCount} skipped.`);
-
     if (fileInputRef.current) fileInputRef.current.value = "";
     await loadRecords();
   };
 
+  const toastRef = useRef<HTMLDivElement>(null);
+  const showToast = (msg: string) => {
+    if (!toastRef.current) return;
+    toastRef.current.textContent = msg;
+    toastRef.current.classList.add("viz-toast-show");
+    setTimeout(() => toastRef.current?.classList.remove("viz-toast-show"), 1600);
+  };
+
+  /* ── Render ── */
+
   return (
-    <div className="tool-page viz-page">
-      <h2>Code Agent Flow Visualizer</h2>
-      <p>Explore the 9 stages of a Coding Agent collaboration and record your practice sessions.</p>
+    <div className="viz-app">
+      {/* Toast */}
+      <div ref={toastRef} className="viz-toast" role="status" aria-live="polite" />
+
+      {/* Header */}
+      <header className="viz-header">
+        <div>
+          <h1>Code Agent Flow Visualizer</h1>
+          <p>Select a stage, copy the prompt, record your practice session.</p>
+        </div>
+        <Link to="/" className="viz-back-link">← Back to Tools</Link>
+      </header>
 
       {!backendOk && (
-        <div className="viz-notice viz-notice-warn">
+        <div className="viz-banner-warn">
           ⚠ Backend is unreachable. Stage browsing and prompt copying still work, but saving records
           is unavailable.
         </div>
       )}
 
-      {/* ── Stage Node Navigator ── */}
-      <div className="viz-navigator">
-        {STAGES.map((stage, i) => (
-          <div key={stage.key} className="viz-node-wrapper">
-            <button
-              className={`viz-node ${selectedStage.key === stage.key ? "viz-node-active" : ""}`}
-              onClick={() => {
-                setSelectedStage(stage);
-                setSummary(null);
-                setError(null);
-              }}
-              title={stage.title}
-            >
-              <span className="viz-node-num">{stage.number}</span>
-              <span className="viz-node-label">{stage.title}</span>
-            </button>
-            {i < STAGES.length - 1 && <div className="viz-connector" />}
-          </div>
-        ))}
-      </div>
-
-      {/* ── Stage Detail Panel ── */}
-      <div className="viz-detail-panel">
-        <h3>
-          Stage {selectedStage.number}: {selectedStage.title}
-        </h3>
-
-        <section>
-          <h4>Goals</h4>
-          <ul>
-            {selectedStage.goals.map((g, i) => (
-              <li key={i}>{g}</li>
-            ))}
-          </ul>
-        </section>
-
-        <section>
-          <h4>Prompt Template</h4>
-          <div
-            className="viz-template-box"
-            dangerouslySetInnerHTML={{
-              __html: renderTemplate(selectedStage.promptTemplate, selectedStage.variables),
-            }}
-          />
-          <div className="viz-var-legend">
-            <strong>Variables:</strong>{" "}
-            {selectedStage.variables.map((v) => (
-              <code key={v} className="viz-var">
-                {`{${v}}`}
-              </code>
+      {/* Main */}
+      <main className="viz-main">
+        {/* Left: Stage List */}
+        <aside className="viz-sidebar">
+          <h2 className="viz-sidebar-title">9 Stages</h2>
+          <div className="viz-stage-list">
+            {STAGES.map((stage) => (
+              <button
+                key={stage.key}
+                className={`viz-stage-btn${selectedStage.key === stage.key ? " active" : ""}`}
+                onClick={() => {
+                  setSelectedStage(stage);
+                  setSummary(null);
+                  setError(null);
+                }}
+              >
+                <span className="viz-stage-no">{stage.number}</span>
+                <span>
+                  <span className="viz-stage-name">{stage.title}</span>
+                  <span className="viz-stage-hint">{stage.hint}</span>
+                </span>
+              </button>
             ))}
           </div>
-          <button className="viz-copy-btn" onClick={handleCopyPrompt}>
-            {copied ? "✓ Copied!" : "Copy Prompt"}
-          </button>
-        </section>
+        </aside>
 
-        <section>
-          <h4>Checklist</h4>
-          <ul className="viz-checklist">
-            {selectedStage.checklist.map((c, i) => (
-              <li key={i}>
-                <label>
-                  <input type="checkbox" /> {c}
-                </label>
-              </li>
-            ))}
-          </ul>
-        </section>
+        {/* Right: Workspace */}
+        <section className="viz-workspace">
+          {/* Detail Panel */}
+          <div className="viz-panel viz-detail">
+            <div className="viz-detail-head">
+              <div>
+                <div className="viz-eyebrow">Stage {selectedStage.number}</div>
+                <h2>{selectedStage.title}</h2>
+                <p className="viz-goal">{selectedStage.goals[0]}</p>
+              </div>
+            </div>
 
-        <section>
-          <h4>Common Errors</h4>
-          <ul className="viz-errors">
-            {selectedStage.commonErrors.map((e, i) => (
-              <li key={i}>{e}</li>
-            ))}
-          </ul>
-        </section>
-
-        <section>
-          <h4>Completion Criteria</h4>
-          <ul>
-            {selectedStage.completionCriteria.map((c, i) => (
-              <li key={i}>{c}</li>
-            ))}
-          </ul>
-        </section>
-      </div>
-
-      {/* ── Practice Record Form ── */}
-      <div className="viz-form-section">
-        <h3>Practice Record — Stage {selectedStage.number}</h3>
-        <div className="viz-form">
-          <label>
-            Your Input (Prompt)
-            <textarea
-              value={userInput}
-              onChange={(e) => setUserInput(e.target.value)}
-              placeholder="What did you prompt the agent with?"
-              rows={3}
-            />
-          </label>
-          <label>
-            Agent Output
-            <textarea
-              value={agentOutput}
-              onChange={(e) => setAgentOutput(e.target.value)}
-              placeholder="What did the agent respond?"
-              rows={3}
-            />
-          </label>
-          <label>
-            Your Feedback
-            <textarea
-              value={feedback}
-              onChange={(e) => setFeedback(e.target.value)}
-              placeholder="What worked well? What didn't?"
-              rows={2}
-            />
-          </label>
-          <label>
-            Next Steps / Improvements
-            <textarea
-              value={nextSteps}
-              onChange={(e) => setNextSteps(e.target.value)}
-              placeholder="What will you do differently next time?"
-              rows={2}
-            />
-          </label>
-        </div>
-
-        <div className="viz-actions">
-          <button onClick={handleSave} disabled={!backendOk}>
-            Save Record
-          </button>
-          <button className="viz-btn-secondary" onClick={handleGenerateSummary}>
-            Generate Summary
-          </button>
-          <button className="viz-btn-secondary" onClick={handleClear}>
-            Clear
-          </button>
-          <button className="viz-btn-secondary" onClick={handleExportJSON} disabled={records.length === 0}>
-            Export JSON
-          </button>
-          <button className="viz-btn-secondary" onClick={handleExportMarkdown} disabled={records.length === 0}>
-            Export Markdown
-          </button>
-          <button className="viz-btn-secondary" onClick={handleImportClick} disabled={importing}>
-            {importing ? "Importing..." : "Import JSON"}
-          </button>
-          <input
-            ref={fileInputRef}
-            type="file"
-            accept=".json"
-            style={{ display: "none" }}
-            onChange={handleImportFile}
-          />
-        </div>
-
-        {error && <div className="viz-notice viz-notice-error">{error}</div>}
-        {importResult && <div className="viz-notice viz-notice-success">{importResult}</div>}
-
-        {summary && (
-          <div className="viz-summary-box">
-            <h4>Generated Summary</h4>
-            <pre>{summary}</pre>
-            <button
-              className="viz-copy-btn"
-              onClick={async () => {
-                try {
-                  await navigator.clipboard.writeText(summary);
-                } catch {
-                  const ta = document.createElement("textarea");
-                  ta.value = summary;
-                  document.body.appendChild(ta);
-                  ta.select();
-                  document.execCommand("copy");
-                  document.body.removeChild(ta);
-                }
-              }}
-            >
-              Copy Summary
-            </button>
-          </div>
-        )}
-      </div>
-
-      {/* ── History ── */}
-      <div className="viz-history-section">
-        <h3>Saved Records ({records.length})</h3>
-        {records.length === 0 ? (
-          <p className="status-text">No records yet. Save your first practice record above.</p>
-        ) : (
-          <div className="viz-history-list">
-            {records.map((r) => {
-              const stage = STAGES.find((s) => s.key === r.stage_key);
-              return (
-                <div key={r.id} className="viz-history-item">
-                  <div className="viz-history-meta">
-                    <strong>
-                      Stage {stage?.number ?? "?"}: {stage?.title ?? r.stage_key}
-                    </strong>
-                    <span className="viz-history-date">
-                      {r.created_at ? new Date(r.created_at).toLocaleString() : ""}
-                    </span>
-                  </div>
-                  <div className="viz-history-preview">
-                    <span>Input: {r.user_input.slice(0, 80)}{r.user_input.length > 80 ? "…" : ""}</span>
-                    <span>Output: {r.agent_output.slice(0, 80)}{r.agent_output.length > 80 ? "…" : ""}</span>
-                  </div>
-                  <button
-                    className="viz-delete-btn"
-                    onClick={() => handleDelete(r.id)}
-                    title="Delete record"
-                  >
-                    ✕
+            <div className="viz-prompt-grid">
+              <div className="viz-prompt-column">
+                <div className="viz-prompt-section">
+                  <div className="viz-prompt-lang">🇬🇧 English</div>
+                  <pre className="viz-prompt-box">{selectedStage.promptTemplate}</pre>
+                  <button className="viz-btn viz-btn-sm viz-btn-primary" onClick={handleCopyPrompt}>
+                    {copied ? "✓ Copied!" : "Copy Prompt"}
                   </button>
                 </div>
-              );
-            })}
+                <div className="viz-prompt-section">
+                  <div className="viz-prompt-lang">🇨🇳 中文</div>
+                  <pre className="viz-prompt-box">{selectedStage.promptTemplateZh}</pre>
+                  <button className="viz-btn viz-btn-sm viz-btn-primary" onClick={handleCopyPromptZh}>
+                    {copiedZh ? "✓ 已复制!" : "复制 Prompt"}
+                  </button>
+                </div>
+              </div>
+              <div>
+                <div className="viz-meta-card">
+                  <h3>可替换变量</h3>
+                  <ul>
+                    {selectedStage.variables.map((v) => (
+                      <li key={v}><code>{`{${v}}`}</code></li>
+                    ))}
+                  </ul>
+                </div>
+                <div className="viz-meta-card">
+                  <h3>检查清单</h3>
+                  <ul>
+                    {selectedStage.checklist.map((c, i) => (
+                      <li key={i}>{c}</li>
+                    ))}
+                  </ul>
+                </div>
+                <div className="viz-meta-card">
+                  <h3>常见错误</h3>
+                  <ul>
+                    {selectedStage.commonErrors.map((e, i) => (
+                      <li key={i}>{e}</li>
+                    ))}
+                  </ul>
+                </div>
+                <div className="viz-meta-card">
+                  <h3>完成标准</h3>
+                  <ul>
+                    {selectedStage.completionCriteria.map((c, i) => (
+                      <li key={i}>{c}</li>
+                    ))}
+                  </ul>
+                </div>
+              </div>
+            </div>
           </div>
-        )}
-      </div>
+
+          {/* Practice Panel */}
+          <div className="viz-panel viz-practice">
+            <h2>Practice Record — Stage {selectedStage.number}</h2>
+
+            <div className="viz-practice-grid">
+              <div>
+                <label htmlFor="viz-input">Your Input</label>
+                <textarea
+                  id="viz-input"
+                  value={userInput}
+                  onChange={(e) => setUserInput(e.target.value)}
+                  placeholder="What did you prompt the agent with?"
+                />
+              </div>
+              <div>
+                <label htmlFor="viz-output">Agent Output</label>
+                <textarea
+                  id="viz-output"
+                  value={agentOutput}
+                  onChange={(e) => setAgentOutput(e.target.value)}
+                  placeholder="What did the agent respond?"
+                />
+              </div>
+              <div>
+                <label htmlFor="viz-feedback">Your Feedback</label>
+                <textarea
+                  id="viz-feedback"
+                  value={feedback}
+                  onChange={(e) => setFeedback(e.target.value)}
+                  placeholder="What worked well? What didn't?"
+                />
+              </div>
+              <div>
+                <label htmlFor="viz-next">Next Steps</label>
+                <textarea
+                  id="viz-next"
+                  value={nextSteps}
+                  onChange={(e) => setNextSteps(e.target.value)}
+                  placeholder="What will you do differently next time?"
+                />
+              </div>
+            </div>
+
+            <div className="viz-practice-actions">
+              <button className="viz-btn viz-btn-primary" onClick={handleSave} disabled={!backendOk}>
+                Save Record
+              </button>
+              <button className="viz-btn viz-btn-secondary" onClick={handleGenerateSummary}>
+                Generate Summary
+              </button>
+              <button className="viz-btn viz-btn-secondary" onClick={handleClear}>
+                Clear
+              </button>
+              <button className="viz-btn viz-btn-secondary" onClick={handleExportJSON} disabled={records.length === 0}>
+                Export JSON
+              </button>
+              <button className="viz-btn viz-btn-secondary" onClick={handleExportMarkdown} disabled={records.length === 0}>
+                Export Markdown
+              </button>
+              <button className="viz-btn viz-btn-secondary" onClick={handleImportClick} disabled={importing}>
+                {importing ? "Importing..." : "Import JSON"}
+              </button>
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept=".json"
+                style={{ display: "none" }}
+                onChange={handleImportFile}
+              />
+            </div>
+
+            {error && <div className="viz-msg viz-msg-error">{error}</div>}
+            {importResult && <div className="viz-msg viz-msg-success">{importResult}</div>}
+
+            {summary && (
+              <div className="viz-summary-box">
+                <h3>Generated Summary</h3>
+                <pre>{summary}</pre>
+                <button
+                  className="viz-btn viz-btn-secondary"
+                  onClick={async () => {
+                    try {
+                      await navigator.clipboard.writeText(summary);
+                      showToast("Summary copied");
+                    } catch {
+                      const ta = document.createElement("textarea");
+                      ta.value = summary;
+                      document.body.appendChild(ta);
+                      ta.select();
+                      document.execCommand("copy");
+                      document.body.removeChild(ta);
+                      showToast("Summary copied");
+                    }
+                  }}
+                >
+                  Copy Summary
+                </button>
+              </div>
+            )}
+
+            {/* History */}
+            <div className="viz-history-section">
+              <div className="viz-history-head">
+                <h3>History ({records.length})</h3>
+                <div className="viz-history-actions-top">
+                  <button className="viz-btn viz-btn-secondary viz-btn-sm" onClick={handleExportJSON} disabled={records.length === 0}>
+                    Export JSON
+                  </button>
+                  <button className="viz-btn viz-btn-secondary viz-btn-sm" onClick={handleExportMarkdown} disabled={records.length === 0}>
+                    Export Markdown
+                  </button>
+                  <button className="viz-btn viz-btn-secondary viz-btn-sm" onClick={handleImportClick} disabled={importing}>
+                    Import JSON
+                  </button>
+                </div>
+              </div>
+
+              {records.length === 0 ? (
+                <div className="viz-history-empty">No records yet. Save your first practice record above.</div>
+              ) : (
+                <div className="viz-history-list">
+                  {records.map((r) => {
+                    const stage = STAGES.find((s) => s.key === r.stage_key);
+                    const preview = r.user_input.slice(0, 60);
+                    return (
+                      <div key={r.id} className="viz-history-item">
+                        <div className="viz-history-top">
+                          <span className="viz-history-stage">
+                            Stage {stage?.number ?? "?"} — {stage?.title ?? r.stage_key}
+                          </span>
+                          <span className="viz-history-date">
+                            {r.created_at ? new Date(r.created_at).toLocaleString() : ""}
+                          </span>
+                        </div>
+                        <div className="viz-history-preview">
+                          {preview}{r.user_input.length > 60 ? "…" : ""}
+                        </div>
+                        <div className="viz-history-actions">
+                          <button
+                            className="viz-btn viz-danger-btn viz-btn-sm"
+                            onClick={() => handleDelete(r.id)}
+                          >
+                            Delete
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          </div>
+        </section>
+      </main>
     </div>
   );
 }

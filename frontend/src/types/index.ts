@@ -24,8 +24,10 @@ export interface StageDefinition {
   key: string;
   number: number;
   title: string;
+  hint: string;
   goals: string[];
   promptTemplate: string;
+  promptTemplateZh: string;
   variables: string[];
   checklist: string[];
   commonErrors: string[];

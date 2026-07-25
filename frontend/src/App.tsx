@@ -13,8 +13,8 @@ function App() {
         <Route path="/" element={<ToolList />} />
         <Route path="/tools/blank_tool" element={<BlankToolPage />} />
         <Route path="/tools/chat_tool" element={<ChatToolPage />} />
-        <Route path="/tools/code_agent_flow_viz" element={<CodeAgentFlowVizPage />} />
       </Route>
+      <Route path="/tools/code_agent_flow_viz" element={<CodeAgentFlowVizPage />} />
       <Route path="/tools/task_decomposer" element={<TaskDecomposerPage />} />
     </Routes>
   );
