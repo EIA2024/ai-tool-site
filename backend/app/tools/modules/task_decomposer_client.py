@@ -1,0 +1,204 @@
+"""Self-contained DeepSeek integration for the Task Decomposer tool.
+
+Handles prompt construction, API call, JSON validation,
+and deterministic agent_prompt generation.
+"""
+
+import json
+
+import httpx
+from pydantic import BaseModel, Field
+
+from app.core.config import settings
+
+DEEPSEEK_URL = "https://api.deepseek.com/chat/completions"
+
+# ── Internal schemas (not exposed outside this tool) ──
+
+
+class AnalyzeTaskInput(BaseModel):
+    raw_task: str = Field(min_length=1, max_length=4000)
+    context: str = Field(default="", max_length=4000)
+    task_type: str = Field(default="feature", max_length=20)
+    risk_hints: list[str] = Field(default_factory=list, max_length=12)
+    model: str = Field(default="deepseek-v4-flash", max_length=64)
+    session_api_key: str = Field(default="", max_length=256)
+
+
+class ModelTaskAnalysis(BaseModel):
+    goal: str = Field(min_length=1)
+    context: list[str] = Field(min_length=1)
+    constraints: list[str] = Field(min_length=1)
+    done_when: list[str] = Field(min_length=1)
+    failure_cases: list[str] = Field(min_length=1)
+    verification: list[str] = Field(min_length=1)
+    missing_questions: list[str] = Field(default_factory=list)
+    risk_level: str = Field(pattern=r"^(low|medium|high)$")
+    non_goals: list[str] = Field(default_factory=list)
+
+
+class TaskAnalysis(ModelTaskAnalysis):
+    agent_prompt: str = Field(min_length=1)
+
+
+class DeepSeekClientError(RuntimeError):
+    pass
+
+
+# ── Prompt building ──
+
+
+def build_system_prompt() -> str:
+    return (
+        "你是一个严谨的工程任务拆解助手，帮助即将进入企业实习的程序员"
+        "把模糊需求拆成 Coding Agent 可执行任务卡。\n\n"
+        "你必须输出 json，且只能输出一个 JSON object。"
+        "不要输出 Markdown，不要解释，不要包含代码块。\n\n"
+        '输出 JSON 格式示例：\n'
+        '{\n'
+        '  "goal": "一句话说明本轮要交付的业务或工程结果",\n'
+        '  "context": ["从用户输入中提取的背景", "需要先调查的上下文"],\n'
+        '  "constraints": ["必须遵守的边界", "不能做的范围"],\n'
+        '  "done_when": ["可验证完成标准"],\n'
+        '  "failure_cases": ["必须处理或验证的失败路径"],\n'
+        '  "verification": ["需要运行的检查或手工验证"],\n'
+        '  "missing_questions": ["仍需向需求方确认的问题"],\n'
+        '  "risk_level": "low",\n'
+        '  "non_goals": ["本轮明确不做的内容"]\n'
+        '}\n\n'
+        "规则：\n"
+        "- 不要直接复制用户原始任务作为 goal，要抽象成可交付结果。\n"
+        "- 必须根据任务类型和风险提示生成具体 constraints、failure_cases 和 verification。\n"
+        "- 如果信息不足，把不确定点放入 missing_questions，不要编造仓库事实。\n"
+        "- risk_level 只能是 low、medium、high。\n"
+        "- 不要输出 agent_prompt 字段；后端会用你输出的结构化字段生成最终 Prompt。"
+    )
+
+
+def build_user_prompt(input_data: AnalyzeTaskInput) -> str:
+    return json.dumps(
+        {
+            "raw_task": input_data.raw_task,
+            "context": input_data.context,
+            "task_type": input_data.task_type,
+            "risk_hints": input_data.risk_hints,
+            "expected_language": "zh-CN",
+            "instruction": "请分析这个开发任务，输出严格 JSON object。",
+        },
+        ensure_ascii=False,
+    )
+
+
+# ── Agent prompt generation (deterministic, not from model) ──
+
+
+def _markdown_list(items: list[str]) -> str:
+    if not items:
+        return "- 暂无"
+    return "\n".join(f"- {item}" for item in items)
+
+
+def build_agent_prompt(analysis: ModelTaskAnalysis) -> str:
+    missing_questions = analysis.missing_questions or ["暂无"]
+    non_goals = analysis.non_goals or ["暂无"]
+    return "\n".join(
+        [
+            "先不要直接写代码。",
+            "",
+            "请先按下面的任务卡进行只读调查，然后输出最小修改计划。"
+            "只有在计划被确认后再实现。",
+            "",
+            "# Goal",
+            analysis.goal,
+            "",
+            "# Context",
+            _markdown_list(analysis.context),
+            "",
+            "# Constraints",
+            _markdown_list(analysis.constraints),
+            "",
+            "# Done when",
+            _markdown_list(analysis.done_when),
+            "",
+            "# Failure cases",
+            _markdown_list(analysis.failure_cases),
+            "",
+            "# Verification",
+            _markdown_list(analysis.verification),
+            "",
+            "# Missing questions",
+            _markdown_list(missing_questions),
+            "",
+            "# Non-goals",
+            _markdown_list(non_goals),
+            "",
+            "请输出：",
+            "1. 只读调查证据；",
+            "2. 修改文件列表；",
+            "3. 正常路径和失败路径；",
+            "4. 验证计划；",
+            "5. 需要我确认的问题。",
+        ]
+    )
+
+
+# ── DeepSeek API call ──
+
+
+def _resolve_api_key(input_data: AnalyzeTaskInput) -> str:
+    """Resolve API key: prefer .env, fall back to session key."""
+    if settings.deepseek_api_key:
+        return settings.deepseek_api_key
+    if input_data.session_api_key:
+        return input_data.session_api_key
+    raise DeepSeekClientError("未配置 DeepSeek API Key。请在 .env 中设置，或在页面输入临时 Key。")
+
+
+async def analyze_with_deepseek(input_data: AnalyzeTaskInput) -> TaskAnalysis:
+    api_key = _resolve_api_key(input_data)
+
+    body = {
+        "model": input_data.model,
+        "messages": [
+            {"role": "system", "content": build_system_prompt()},
+            {"role": "user", "content": build_user_prompt(input_data)},
+        ],
+        "response_format": {"type": "json_object"},
+        "temperature": 0.2,
+        "max_tokens": 2200,
+        "stream": False,
+    }
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=60) as client:
+            response = await client.post(DEEPSEEK_URL, headers=headers, json=body)
+    except httpx.HTTPError as exc:
+        raise DeepSeekClientError("无法连接 DeepSeek API") from exc
+
+    if response.status_code >= 400:
+        raise DeepSeekClientError(
+            f"DeepSeek API 返回错误：HTTP {response.status_code}"
+        )
+
+    try:
+        payload = response.json()
+        content = payload["choices"][0]["message"]["content"]
+    except (KeyError, IndexError, TypeError, json.JSONDecodeError) as exc:
+        raise DeepSeekClientError("DeepSeek 返回结构异常") from exc
+
+    if not content or not content.strip():
+        raise DeepSeekClientError("DeepSeek 返回空内容，请调整 prompt 后重试")
+
+    try:
+        model_analysis = ModelTaskAnalysis.model_validate(json.loads(content))
+    except (json.JSONDecodeError, ValueError) as exc:
+        raise DeepSeekClientError("DeepSeek 返回的 JSON 未通过 schema 校验") from exc
+
+    return TaskAnalysis(
+        **model_analysis.model_dump(),
+        agent_prompt=build_agent_prompt(model_analysis),
+    )

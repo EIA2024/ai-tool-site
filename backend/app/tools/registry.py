@@ -2,6 +2,7 @@ from app.tools.base import BaseTool
 from app.tools.modules.blank_tool import BlankTool
 from app.tools.modules.chat_tool import ChatTool
 from app.tools.modules.code_agent_flow_viz import CodeAgentFlowVizTool
+from app.tools.modules.task_decomposer import TaskDecomposerTool
 
 
 class ToolRegistry:
@@ -24,3 +25,4 @@ tool_registry = ToolRegistry()
 tool_registry.register(BlankTool())
 tool_registry.register(ChatTool())
 tool_registry.register(CodeAgentFlowVizTool())
+tool_registry.register(TaskDecomposerTool())
