@@ -22,6 +22,9 @@ class Settings(BaseSettings):
     redis_host: str = "localhost"
     redis_port: int = 6379
 
+    # DeepSeek
+    deepseek_api_key: str = ""
+
     model_config = {"env_file": ".env", "env_file_encoding": "utf-8"}
 
 
