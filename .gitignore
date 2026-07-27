@@ -1,1 +1,11 @@
-tmp_original.html
+# Prompt-driven workflow runtime state
+.workflow/runtime/
+.workflow/**/*.tmp
+.workflow/**/*.log
+
+# Optional sibling worktree root when configured inside the repository
+.workflow-worktrees/
+
+# Common local artifacts
+.DS_Store
+Thumbs.db

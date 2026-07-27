@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "checkpoint_id": "CP-000",
+  "run_id": "WF-YYYYMMDD-NNN-slug",
+  "branch": "workflow/WF-YYYYMMDD-NNN-slug",
+  "head_commit": "TODO",
+  "working_tree_dirty": false,
+  "workflow_state": "S1_GOAL",
+  "state_status": "active",
+  "current_step": null,
+  "created_at": "TODO",
+  "created_by": null,
+  "handoff_to": "any",
+  "completed": [],
+  "pending": [],
+  "changed_files": [],
+  "verification": [],
+  "failed_attempts": [],
+  "active_processes": [],
+  "open_risks": [],
+  "recovered_by": null,
+  "next_action": "Formalize the Goal."
+}

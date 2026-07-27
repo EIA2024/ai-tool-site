@@ -1,20 +1,21 @@
-# Codex Entry
+# Cross-Agent Workflow Bootstrap
 
-This repository uses the final Claude–Codex Prompt-native Workflow.
+This repository uses an agent-independent workflow. Claude Code and Codex may both execute any legal workflow State and may take over from one another only at a recorded safe checkpoint.
 
-Always read:
+Before any action:
 
-1. `.agent-workspace/protocol/WORKFLOW_PROTOCOL.md`
-2. `.agent-workspace/protocol/HANDOFF_TEMPLATE.md`
-3. `.agent-workspace/protocol/CODEX_RULES.md`
-4. the exact `.agent-workspace/workflows/<WORKFLOW_ID>/WORKFLOW.md`
+1. Read `.workflow/core/PROTOCOL.md`.
+2. Determine the current Git branch and repository root.
+3. Derive the Run ID from a branch named `workflow/<run-id>`.
+4. Read `.workflow/runs/<run-id>/state.json`.
+5. Read `.workflow/runs/<run-id>/checkpoint.json`.
+6. Read the current State file under `.workflow/states/`.
+7. Verify the Branch–Run–State ownership invariants.
+8. Acquire the local agent lock before writing.
+9. Continue from `next_action`; do not restart the workflow by default.
 
-Codex has one role:
+When operating on `main` or an `integration/*` branch, read `.workflow/roles/MASTER-INTEGRATOR.md` and `.workflow/core/INTEGRATION-PROTOCOL.md`.
 
-- Planner.
+Authoritative state is stored in Git and `.workflow/`. Chat history, private reasoning, product-specific memory, UI task lists, and unrecorded decisions are never authoritative.
 
-Require and verify the full Workflow ID.
-Read the locally confirmed `20-intent.md`; do not redefine product intent.
-Do not execute production changes.
-Do not perform the final Review.
-Never read sibling Workflow artifacts unless explicitly authorized.
+Do not commit, push, merge, deploy, migrate, delete data, or perform irreversible actions unless the applicable workflow Gate and explicit human authorization have been recorded.

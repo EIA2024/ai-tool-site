@@ -1,27 +1,11 @@
-# Claude Code Entry
+@AGENTS.md
 
-This repository uses the final Claude–Codex Prompt-native Workflow.
+# Claude Code Runtime Notes
 
-Always read:
+Claude Code is one compatible runtime for this workflow; it does not own particular States.
 
-1. `.agent-workspace/protocol/WORKFLOW_PROTOCOL.md`
-2. `.agent-workspace/protocol/HANDOFF_TEMPLATE.md`
-3. `.agent-workspace/protocol/CLAUDE_RULES.md`
-4. the exact `.agent-workspace/workflows/<WORKFLOW_ID>/WORKFLOW.md`
-
-Claude roles:
-
-- Workflow Bootstrap;
-- Project Context Scout;
-- Product Intent Facilitator;
-- Executor;
-- Independent Reviewer;
-- Remediator.
-
-Execution and Review must use separate Claude sessions.
-A Reviewer must not modify production code.
-
-Require the full Workflow ID after bootstrap.
-Never infer a Workflow from target similarity.
-Never read sibling Workflow artifacts unless the current Workflow explicitly
-authorizes one exact immutable dependency.
+- Treat `.workflow/runs/<run-id>/` as the only Run-specific memory.
+- Do not use Claude Auto Memory as workflow state.
+- Open a fresh conversation when taking over from Codex or after workflow rules change.
+- At a takeover, reconstruct state from Git, `state.json`, `checkpoint.json`, current artifacts, and actual command evidence.
+- If the current lock belongs to another active agent, remain read-only and request a release or explicit forced takeover.
