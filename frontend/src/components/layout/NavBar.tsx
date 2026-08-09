@@ -7,8 +7,10 @@ export default function NavBar() {
         AI Tool Site
       </Link>
       <div className="nav-links">
-        <Link to="/tools/blank-tool">Blank Tool</Link>
-        <Link to="/tools/chat-tool">Chat Tool</Link>
+        <Link to="/tools/blank_tool">Blank Tool</Link>
+        <Link to="/tools/chat_tool">Chat Tool</Link>
+        <Link to="/tools/code_agent_flow_viz">Flow Visualizer</Link>
+        <Link to="/tools/task_decomposer">Task Decomposer</Link>
       </div>
     </nav>
   );

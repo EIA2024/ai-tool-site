@@ -3,6 +3,7 @@ export interface ToolMeta {
   name: string;
   description: string;
   mode: "request-response" | "realtime";
+  config?: Record<string, unknown>;
 }
 
 export interface ApiResponse<T = unknown> {
@@ -16,6 +17,41 @@ export interface WsMessage {
   content: string;
   sender: string;
   timestamp: string;
+  /** Present on the server's "connected" frame — carries the DB session id. */
+  session_id?: string;
+}
+
+/* ── Public runtime config (GET /api/config) ── */
+
+export interface PublicConfig {
+  deepseek_models: string[];
+  deepseek_default_model: string;
+}
+
+/* ── Chat sessions & messages ── */
+
+export interface ChatSession {
+  id: string;
+  title: string;
+  tool_id: string | null;
+  created_at: string | null;
+  updated_at: string | null;
+}
+
+export interface ChatMessage {
+  id: string;
+  session_id: string;
+  role: "user" | "assistant" | "system";
+  content: string;
+  created_at: string | null;
+}
+
+export interface ChatSessionListData {
+  sessions: ChatSession[];
+}
+
+export interface ChatMessagesData {
+  messages: ChatMessage[];
 }
 
 /* ── Code Agent Flow Visualizer types ── */

@@ -3,32 +3,46 @@ import type { WsMessage } from "../types";
 type MessageHandler = (msg: WsMessage) => void;
 type StatusHandler = (status: string) => void;
 
+const BASE_DELAY_MS = 1_000;
+const MAX_DELAY_MS = 30_000;
+
+function wsUrl(sessionId?: string | null): string {
+  const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+  const query = sessionId ? `?session_id=${encodeURIComponent(sessionId)}` : "";
+  return `${protocol}//${window.location.host}/ws/chat${query}`;
+}
+
 export class WsClient {
   private ws: WebSocket | null = null;
-  private url: string;
   private onMessage: MessageHandler;
   private onStatus: StatusHandler;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private shouldReconnect = true;
+  private attempt = 0;
+  private sessionId: string | null = null;
 
-  constructor(
-    url: string,
-    onMessage: MessageHandler,
-    onStatus: StatusHandler
-  ) {
-    this.url = url;
+  constructor(onMessage: MessageHandler, onStatus: StatusHandler) {
     this.onMessage = onMessage;
     this.onStatus = onStatus;
   }
 
-  connect() {
+  connect(sessionId?: string | null) {
     if (this.ws) {
       this.ws.close();
     }
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+    this.sessionId = sessionId ?? null;
     this.shouldReconnect = true;
-    this.ws = new WebSocket(this.url);
+    this.attempt = 0;
+    this.ws = new WebSocket(wsUrl(this.sessionId));
 
-    this.ws.onopen = () => this.onStatus("connected");
+    this.ws.onopen = () => {
+      this.attempt = 0; // healthy again — reset backoff
+      this.onStatus("connected");
+    };
     this.ws.onclose = () => {
       this.onStatus("disconnected");
       this.scheduleReconnect();
@@ -64,9 +78,11 @@ export class WsClient {
 
   private scheduleReconnect() {
     if (!this.shouldReconnect) return;
+    const delay = Math.min(BASE_DELAY_MS * 2 ** this.attempt, MAX_DELAY_MS);
+    this.attempt += 1;
+    this.onStatus(`reconnecting (${Math.round(delay / 1000)}s)`);
     this.reconnectTimer = setTimeout(() => {
-      this.onStatus("reconnecting");
-      this.connect();
-    }, 3000);
+      this.connect(this.sessionId);
+    }, delay);
   }
 }

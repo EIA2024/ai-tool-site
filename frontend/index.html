@@ -1,10 +1,21 @@
 <!doctype html>
-<html lang="en">
+<html lang="zh-CN">
   <head>
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>frontend</title>
+    <!--
+      Pragmatic CSP: blocks external scripts/objects/base-tag hijack while
+      keeping Vite dev HMR working (inline preamble + ws). No
+      dangerouslySetInnerHTML is used anywhere in this app, and all user
+      content is escaped by React, so 'unsafe-inline' scripts here mostly
+      guards against future regressions.
+    -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' ws: wss:; object-src 'none'; base-uri 'self'"
+    />
+    <title>AI Tool Site</title>
   </head>
   <body>
     <div id="root"></div>

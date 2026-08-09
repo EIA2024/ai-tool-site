@@ -14,6 +14,7 @@ from app.models import ChatMessage, ChatSession
 from app.services.chat_history import (
     add_message,
     create_session,
+    delete_session,
     get_messages,
     get_recent_sessions,
     get_session,
@@ -112,3 +113,12 @@ async def add_rest_message(
     await touch_session(db, session_id)
     await db.commit()
     return ok({"message": _message_to_dict(msg)})
+
+
+@router.delete("/sessions/{session_id}")
+async def remove_session(session_id: str, db: AsyncSession = Depends(get_db)):
+    """Delete a session and all its messages."""
+    if not await delete_session(db, session_id):
+        raise NotFoundError("Session not found")
+    await db.commit()
+    return ok({"deleted": True})

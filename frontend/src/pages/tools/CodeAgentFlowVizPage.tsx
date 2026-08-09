@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
-import { post } from "../../lib/api";
+import { invokeTool } from "../../lib/api";
 import type {
   ListRecordsData,
   PracticeRecord,
@@ -320,11 +320,11 @@ export default function CodeAgentFlowVizPage() {
   /* Load records on mount */
   useEffect(() => {
     loadRecords();
-  }, []);
+  }, [loadRecords]);
 
   const loadRecords = useCallback(async () => {
     try {
-      const res = await post<ListRecordsData>("/tools/code_agent_flow_viz/invoke", {
+      const res = await invokeTool<ListRecordsData>("code_agent_flow_viz", {
         action: "list_records",
       });
       if (res.success && res.data) {
@@ -342,7 +342,7 @@ export default function CodeAgentFlowVizPage() {
     setError(null);
     setSummary(null);
     try {
-      const res = await post<SaveRecordData>("/tools/code_agent_flow_viz/invoke", {
+      const res = await invokeTool<SaveRecordData>("code_agent_flow_viz", {
         action: "save_record",
         stage_key: selectedStage.key,
         user_input: userInput,
@@ -368,7 +368,7 @@ export default function CodeAgentFlowVizPage() {
 
   const handleDelete = async (id: string) => {
     try {
-      const res = await post("/tools/code_agent_flow_viz/invoke", {
+      const res = await invokeTool("code_agent_flow_viz", {
         action: "delete_record",
         id,
       });
@@ -522,7 +522,7 @@ export default function CodeAgentFlowVizPage() {
     for (const item of imported) {
       const rec = item as Record<string, unknown>;
       try {
-        const res = await post<SaveRecordData>("/tools/code_agent_flow_viz/invoke", {
+        const res = await invokeTool<SaveRecordData>("code_agent_flow_viz", {
           action: "save_record",
           stage_key: String(rec.stage_key ?? ""),
           user_input: String(rec.user_input ?? ""),

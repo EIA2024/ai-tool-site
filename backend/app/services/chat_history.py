@@ -72,3 +72,12 @@ async def touch_session(db: AsyncSession, session_id: str) -> None:
         .where(ChatSession.id == session_id)
         .values(updated_at=utcnow())
     )
+
+
+async def delete_session(db: AsyncSession, session_id: str) -> bool:
+    """Delete a session and all its messages (cascade via ORM relationship)."""
+    session = await get_session(db, session_id)
+    if session is None:
+        return False
+    await db.delete(session)
+    return True

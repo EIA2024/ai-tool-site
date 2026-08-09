@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
-import { post } from "../../lib/api";
+import { get, invokeTool } from "../../lib/api";
 import type {
   AnalyzeTaskData,
   HistoryRecord,
   ListHistoryData,
+  PublicConfig,
   TaskAnalysis,
 } from "../../types";
 
@@ -58,6 +59,8 @@ const RISK_LABELS: Record<string, string> = {
 export default function TaskDecomposerPage() {
   const [draft, setDraft] = useState<Draft>(loadDraft);
   const [apiKey, setApiKey] = useState("");
+  const [models, setModels] = useState<string[]>(["deepseek-v4-flash", "deepseek-v4-pro"]);
+  const [defaultModel, setDefaultModel] = useState("deepseek-v4-flash");
   const [analysis, setAnalysis] = useState<TaskAnalysis | null>(null);
   const [analyzing, setAnalyzing] = useState(false);
   const [outputState, setOutputState] = useState("等待分析");
@@ -65,6 +68,26 @@ export default function TaskDecomposerPage() {
   const [history, setHistory] = useState<HistoryRecord[]>([]);
   const [historyFilter, setHistoryFilter] = useState("");
   const toastRef = useRef<HTMLDivElement>(null);
+
+  // ── Model list is the backend's single source of truth ──
+  useEffect(() => {
+    get<PublicConfig>("/config")
+      .then((res) => {
+        if (res.success && res.data) {
+          const cfg = res.data;
+          setModels(cfg.deepseek_models);
+          setDefaultModel(cfg.deepseek_default_model);
+          setDraft((prev) =>
+            cfg.deepseek_models.includes(prev.model)
+              ? prev
+              : { ...prev, model: cfg.deepseek_default_model }
+          );
+        }
+      })
+      .catch(() => {
+        // Fall back to the hardcoded defaults above.
+      });
+  }, []);
 
   // ── Toast ──
   const showToast = useCallback((msg: string) => {
@@ -83,7 +106,7 @@ export default function TaskDecomposerPage() {
   // ── History fetch ──
   const fetchHistory = useCallback(async () => {
     try {
-      const res = await post<ListHistoryData>("/tools/task_decomposer/invoke", {
+      const res = await invokeTool<ListHistoryData>("task_decomposer", {
         action: "list_history",
         task_type: historyFilter || undefined,
       });
@@ -139,15 +162,19 @@ export default function TaskDecomposerPage() {
     setAnalyzing(true);
 
     try {
-      const res = await post<AnalyzeTaskData>("/tools/task_decomposer/invoke", {
-        action: "analyze_task",
-        raw_task,
-        context: draft.context,
-        task_type: draft.task_type,
-        model: draft.model,
-        risk_hints: draft.risk_hints,
-        session_api_key: apiKey || undefined,
-      });
+      const res = await invokeTool<AnalyzeTaskData>(
+        "task_decomposer",
+        {
+          action: "analyze_task",
+          raw_task,
+          context: draft.context,
+          task_type: draft.task_type,
+          model: draft.model,
+          risk_hints: draft.risk_hints,
+          session_api_key: apiKey || undefined,
+        },
+        { timeoutMs: 90_000 } // DeepSeek analysis can take a while
+      );
       if (res.success && res.data) {
         setAnalysis(res.data.analysis);
         setOutputState("已完成");
@@ -160,7 +187,8 @@ export default function TaskDecomposerPage() {
         showToast(msg);
       }
     } catch (err) {
-      const msg = `请求失败：${String(err)}`;
+      const msg =
+        err instanceof Error ? err.message : `请求失败：${String(err)}`;
       setError(msg);
       setOutputState("失败");
       showToast(msg);
@@ -208,7 +236,7 @@ export default function TaskDecomposerPage() {
 
   const deleteHistory = async (id: string) => {
     try {
-      const res = await post("/tools/task_decomposer/invoke", {
+      const res = await invokeTool("task_decomposer", {
         action: "delete_history",
         id,
       });
@@ -310,8 +338,13 @@ export default function TaskDecomposerPage() {
                     value={draft.model}
                     onChange={(e) => updateField("model", e.target.value)}
                   >
-                    <option value="deepseek-v4-flash">deepseek-v4-flash</option>
-                    <option value="deepseek-v4-pro">deepseek-v4-pro</option>
+                    {models.length === 0 && <option value="">加载中...</option>}
+                    {models.map((m) => (
+                      <option key={m} value={m}>
+                        {m}
+                        {m === defaultModel ? " (默认)" : ""}
+                      </option>
+                    ))}
                   </select>
                 </div>
               </div>

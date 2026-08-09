@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { post } from "../../lib/api";
+import { invokeTool } from "../../lib/api";
 
 export default function BlankToolPage() {
   const [input, setInput] = useState("");
@@ -9,7 +9,10 @@ export default function BlankToolPage() {
   const handleSubmit = async () => {
     setLoading(true);
     try {
-      const res = await post("/tools/blank_tool/invoke", { input });
+      const res = await invokeTool<{ echo: string; message: string }>(
+        "blank_tool",
+        { input }
+      );
       if (res.success && res.data) {
         setResult(JSON.stringify(res.data, null, 2));
       } else {
