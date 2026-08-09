@@ -40,6 +40,9 @@ select = ["E", "F", "I", "N", "W"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+# Must match the test loop scope; otherwise async fixtures run on a
+# separate module-scoped loop whose teardown hangs on Windows.
+asyncio_default_fixture_loop_scope = "function"
 
 [build-system]
 requires = ["setuptools>=75.0"]

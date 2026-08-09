@@ -1,35 +1,17 @@
-"""Tests for the Task Decomposer history CRUD service."""
+"""Tests for the Task Decomposer history CRUD service.
+
+Uses the shared in-memory ``db`` fixture from ``tests/conftest.py`` (which
+disposes the engine after each test so the aiosqlite worker thread terminates).
+"""
 
 import pytest
-import pytest_asyncio
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
-from app.models import Base, TaskAnalysisHistory
 from app.services.task_decomposer_history import (
     create_history,
     delete_history,
     get_history,
     list_history,
 )
-
-TEST_DB_URL = "sqlite+aiosqlite:///:memory:"
-engine = create_async_engine(TEST_DB_URL, echo=False)
-TestSession = async_sessionmaker(bind=engine, class_=AsyncSession, expire_on_commit=False)
-
-
-@pytest_asyncio.fixture(autouse=True)
-async def setup_db():
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-    yield
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.drop_all)
-
-
-@pytest_asyncio.fixture
-async def db():
-    async with TestSession() as session:
-        yield session
 
 
 @pytest.mark.asyncio
@@ -55,6 +37,7 @@ async def test_create_and_get_history(db):
             "agent_prompt": "test prompt",
         },
     )
+    await db.commit()
     assert created.id is not None
     assert created.raw_task == "Test task"
     assert created.task_type == "feature"
@@ -68,8 +51,27 @@ async def test_create_and_get_history(db):
 
 @pytest.mark.asyncio
 async def test_list_history(db):
-    await create_history(db, raw_task="Task A", context="", risk_hints=None, task_type="feature", model_name="m1", risk_level="low", structured_output={"goal": "a"})
-    await create_history(db, raw_task="Task B", context="", risk_hints=None, task_type="bugfix", model_name="m1", risk_level="high", structured_output={"goal": "b"})
+    await create_history(
+        db,
+        raw_task="Task A",
+        context="",
+        risk_hints=None,
+        task_type="feature",
+        model_name="m1",
+        risk_level="low",
+        structured_output={"goal": "a"},
+    )
+    await create_history(
+        db,
+        raw_task="Task B",
+        context="",
+        risk_hints=None,
+        task_type="bugfix",
+        model_name="m1",
+        risk_level="high",
+        structured_output={"goal": "b"},
+    )
+    await db.commit()
 
     all_records = await list_history(db)
     assert len(all_records) == 2
@@ -87,7 +89,17 @@ async def test_get_history_not_found(db):
 
 @pytest.mark.asyncio
 async def test_delete_history(db):
-    created = await create_history(db, raw_task="Delete me", context="", risk_hints=None, task_type="feature", model_name="m1", risk_level="low", structured_output={"goal": "g"})
+    created = await create_history(
+        db,
+        raw_task="Delete me",
+        context="",
+        risk_hints=None,
+        task_type="feature",
+        model_name="m1",
+        risk_level="low",
+        structured_output={"goal": "g"},
+    )
+    await db.commit()
     deleted = await delete_history(db, created.id)
     assert deleted is True
 

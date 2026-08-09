@@ -22,8 +22,8 @@ from app.services.task_decomposer_history import (
 )
 from app.tools.base import BaseTool
 from app.tools.modules.task_decomposer_client import (
-    DeepSeekClientError,
     AnalyzeTaskInput,
+    DeepSeekClientError,
     analyze_with_deepseek,
 )
 
@@ -35,7 +35,10 @@ _SUPPORTED_ACTIONS = ("analyze_task", "list_history", "get_history", "delete_his
 class TaskDecomposerTool(BaseTool):
     tool_id = "task_decomposer"
     name = "Task Decomposer"
-    description = "Break down vague development tasks into structured Coding Agent task cards using DeepSeek"
+    description = (
+        "Break down vague development tasks into structured Coding Agent "
+        "task cards using DeepSeek"
+    )
     mode = "request-response"
 
     def config(self) -> dict:

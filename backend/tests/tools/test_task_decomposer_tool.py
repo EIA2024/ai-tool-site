@@ -1,13 +1,22 @@
-"""Tests for the Task Decomposer tool module."""
+"""Tests for the Task Decomposer tool module.
+
+The refactor moved the tool onto the typed-error contract: ``handle_invoke``
+takes ``(payload, db)``, returns the data payload only, and signals expected
+failures by raising ``ValidationError`` / ``NotFoundError`` / ``ProviderError``.
+"""
 
 import pytest
 
+from app.core.errors import NotFoundError, ProviderError, ValidationError
+from app.services.task_decomposer_history import create_history
 from app.tools.modules.task_decomposer import (
     TaskDecomposerTool,
     _analysis_to_dict,
     _history_to_dict,
 )
 from app.tools.modules.task_decomposer_client import (
+    AnalyzeTaskInput,
+    DeepSeekClientError,
     ModelTaskAnalysis,
     _resolve_api_key,
     build_agent_prompt,
@@ -22,53 +31,102 @@ def test_tool_id_and_metadata():
     assert tool.mode == "request-response"
 
 
-@pytest.mark.asyncio
-async def test_unknown_action():
-    result = await tool.handle_invoke({"action": "bogus"})
-    assert result["success"] is False
-    assert result["error"]["code"] == "UNKNOWN_ACTION"
+def test_config_advertises_models_and_actions():
+    cfg = tool.config()
+    assert "analyze_task" in cfg["supported_actions"]
+    assert isinstance(cfg["models"], list)
+    assert cfg["default_model"] in cfg["models"]
 
 
 @pytest.mark.asyncio
-async def test_analyze_task_missing_raw_task():
-    result = await tool.handle_invoke({"action": "analyze_task"})
-    assert result["success"] is False
-    assert result["error"]["code"] == "VALIDATION_ERROR"
+async def test_unknown_action(db):
+    with pytest.raises(ValidationError) as excinfo:
+        await tool.handle_invoke({"action": "bogus"}, db)
+    assert excinfo.value.code == "VALIDATION_ERROR"
+    assert "bogus" in str(excinfo.value)
 
 
 @pytest.mark.asyncio
-async def test_analyze_task_with_empty_task():
-    result = await tool.handle_invoke({"action": "analyze_task", "raw_task": ""})
-    assert result["success"] is False
-    assert result["error"]["code"] == "VALIDATION_ERROR"
+async def test_analyze_task_missing_raw_task(db):
+    with pytest.raises(ValidationError) as excinfo:
+        await tool.handle_invoke({"action": "analyze_task"}, db)
+    assert excinfo.value.code == "VALIDATION_ERROR"
 
 
 @pytest.mark.asyncio
-async def test_list_history_no_records():
-    result = await tool.handle_invoke({"action": "list_history"})
-    # Without a real PostgreSQL connection, this may return an INTERNAL_ERROR
-    # or succeed with empty list (if a test DB is configured).
-    # Accept both outcomes — the important thing is it doesn't crash.
-    if result["success"]:
-        assert result["data"]["records"] == []
-    else:
-        assert result["error"]["code"] in ("INTERNAL_ERROR",)
+async def test_analyze_task_with_empty_task(db):
+    with pytest.raises(ValidationError):
+        await tool.handle_invoke({"action": "analyze_task", "raw_task": ""}, db)
 
 
 @pytest.mark.asyncio
-async def test_analyze_task_no_api_key():
-    """Without .env key or session key, should return DEEPSEEK_ERROR."""
-    result = await tool.handle_invoke({
-        "action": "analyze_task",
-        "raw_task": "test task",
-        "context": "",
-        "task_type": "feature",
-        "risk_hints": [],
-        "model": "deepseek-v4-flash",
-        "session_api_key": "",
-    })
-    assert result["success"] is False
-    assert result["error"]["code"] == "DEEPSEEK_ERROR"
+async def test_analyze_task_unsupported_model(db):
+    with pytest.raises(ValidationError) as excinfo:
+        await tool.handle_invoke(
+            {"action": "analyze_task", "raw_task": "task", "model": "gpt-4o"}, db
+        )
+    assert "不支持" in str(excinfo.value)
+
+
+@pytest.mark.asyncio
+async def test_analyze_task_no_api_key(db, monkeypatch):
+    """Without .env key or session key, the client error surfaces as ProviderError."""
+    monkeypatch.setattr(
+        "app.tools.modules.task_decomposer_client.settings.deepseek_api_key", ""
+    )
+    with pytest.raises(ProviderError) as excinfo:
+        await tool.handle_invoke(
+            {
+                "action": "analyze_task",
+                "raw_task": "test task",
+                "context": "",
+                "task_type": "feature",
+                "risk_hints": [],
+                "model": "deepseek-v4-flash",
+                "session_api_key": "",
+            },
+            db,
+        )
+    assert excinfo.value.code == "DEEPSEEK_ERROR"
+
+
+@pytest.mark.asyncio
+async def test_list_history_empty(db):
+    result = await tool.handle_invoke({"action": "list_history"}, db)
+    assert result["records"] == []
+
+
+@pytest.mark.asyncio
+async def test_list_history_returns_saved_records(db):
+    await create_history(
+        db,
+        raw_task="Fix bug",
+        context="",
+        task_type="bugfix",
+        model_name="deepseek-v4-flash",
+        risk_hints=None,
+        risk_level="high",
+        structured_output={"goal": "fix"},
+    )
+    await db.commit()
+    result = await tool.handle_invoke(
+        {"action": "list_history", "task_type": "bugfix"}, db
+    )
+    assert len(result["records"]) == 1
+    assert result["records"][0]["raw_task"] == "Fix bug"
+    assert result["records"][0]["risk_level"] == "high"
+
+
+@pytest.mark.asyncio
+async def test_get_history_not_found(db):
+    with pytest.raises(NotFoundError):
+        await tool.handle_invoke({"action": "get_history", "id": "missing"}, db)
+
+
+@pytest.mark.asyncio
+async def test_delete_history_not_found(db):
+    with pytest.raises(NotFoundError):
+        await tool.handle_invoke({"action": "delete_history", "id": "missing"}, db)
 
 
 def test_analysis_to_dict():
@@ -108,7 +166,7 @@ def test_history_to_dict():
     assert d["risk_level"] == "medium"
 
 
-# ── F-003: DeepSeek client unit tests ──
+# ── DeepSeek client unit tests ──
 
 
 def test_build_agent_prompt_includes_sections():
@@ -153,23 +211,41 @@ def test_build_agent_prompt_with_empty_lists():
 
 def test_resolve_api_key_prefers_settings(monkeypatch):
     """_resolve_api_key should prefer settings.deepseek_api_key over session key."""
-    monkeypatch.setattr("app.tools.modules.task_decomposer_client.settings.deepseek_api_key", "env-key")
-    from app.tools.modules.task_decomposer_client import AnalyzeTaskInput
-    result = _resolve_api_key(AnalyzeTaskInput(raw_task="t", session_api_key="session-key"))
+    monkeypatch.setattr(
+        "app.tools.modules.task_decomposer_client.settings.deepseek_api_key", "env-key"
+    )
+    result = _resolve_api_key(
+        AnalyzeTaskInput(raw_task="t", model="m", session_api_key="sk-session-key")
+    )
     assert result == "env-key"
 
 
 def test_resolve_api_key_fallback(monkeypatch):
-    """_resolve_api_key should fall back to session key when env key is empty."""
-    monkeypatch.setattr("app.tools.modules.task_decomposer_client.settings.deepseek_api_key", "")
-    from app.tools.modules.task_decomposer_client import AnalyzeTaskInput
-    result = _resolve_api_key(AnalyzeTaskInput(raw_task="t", session_api_key="session-key"))
-    assert result == "session-key"
+    """_resolve_api_key should fall back to a valid session key when env key is empty."""
+    monkeypatch.setattr(
+        "app.tools.modules.task_decomposer_client.settings.deepseek_api_key", ""
+    )
+    result = _resolve_api_key(
+        AnalyzeTaskInput(raw_task="t", model="m", session_api_key="sk-session-key")
+    )
+    assert result == "sk-session-key"
+
+
+def test_resolve_api_key_rejects_bad_session_key(monkeypatch):
+    """A session key not starting with 'sk-' must be rejected."""
+    monkeypatch.setattr(
+        "app.tools.modules.task_decomposer_client.settings.deepseek_api_key", ""
+    )
+    with pytest.raises(DeepSeekClientError, match="sk-"):
+        _resolve_api_key(
+            AnalyzeTaskInput(raw_task="t", model="m", session_api_key="not-a-key")
+        )
 
 
 def test_resolve_api_key_raises_when_both_missing(monkeypatch):
     """_resolve_api_key should raise when both keys are absent."""
-    monkeypatch.setattr("app.tools.modules.task_decomposer_client.settings.deepseek_api_key", "")
-    from app.tools.modules.task_decomposer_client import DeepSeekClientError, AnalyzeTaskInput
+    monkeypatch.setattr(
+        "app.tools.modules.task_decomposer_client.settings.deepseek_api_key", ""
+    )
     with pytest.raises(DeepSeekClientError, match="未配置"):
-        _resolve_api_key(AnalyzeTaskInput(raw_task="t"))
+        _resolve_api_key(AnalyzeTaskInput(raw_task="t", model="m"))

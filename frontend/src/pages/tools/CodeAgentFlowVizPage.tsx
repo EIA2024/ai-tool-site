@@ -317,11 +317,6 @@ export default function CodeAgentFlowVizPage() {
   const [importResult, setImportResult] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  /* Load records on mount */
-  useEffect(() => {
-    loadRecords();
-  }, [loadRecords]);
-
   const loadRecords = useCallback(async () => {
     try {
       const res = await invokeTool<ListRecordsData>("code_agent_flow_viz", {
@@ -337,6 +332,11 @@ export default function CodeAgentFlowVizPage() {
       setBackendOk(false);
     }
   }, []);
+
+  /* Load records on mount */
+  useEffect(() => {
+    loadRecords();
+  }, [loadRecords]);
 
   const handleSave = async () => {
     setError(null);
