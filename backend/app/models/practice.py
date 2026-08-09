@@ -16,7 +16,7 @@ class AgentPracticeRecord(Base):
     id: Mapped[str] = mapped_column(
         String(36), primary_key=True, default=lambda: str(uuid.uuid4())
     )
-    stage_key: Mapped[str] = mapped_column(String(20), nullable=False)
+    stage_key: Mapped[str] = mapped_column(String(64), nullable=False)
     user_input: Mapped[str] = mapped_column(Text, default="")
     agent_output: Mapped[str] = mapped_column(Text, default="")
     feedback: Mapped[str] = mapped_column(Text, default="")

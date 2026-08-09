@@ -14,8 +14,11 @@ target_metadata = Base.metadata
 
 # Use DATABASE_URL env var if set (Docker), otherwise fall back to alembic.ini
 db_url = os.environ.get("DATABASE_URL") or config.get_main_option("sqlalchemy.url", "")
+# Alembic needs a sync driver: map each async dialect to its sync sibling.
 if db_url.startswith("postgresql+asyncpg://"):
     db_url = db_url.replace("postgresql+asyncpg://", "postgresql://", 1)
+elif db_url.startswith("sqlite+aiosqlite://"):
+    db_url = db_url.replace("sqlite+aiosqlite://", "sqlite://", 1)
 
 
 def run_migrations_offline() -> None:
