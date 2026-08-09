@@ -5,13 +5,19 @@ and deterministic agent_prompt generation.
 """
 
 import json
+from typing import Annotated
 
 import httpx
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, StringConstraints
 
 from app.core.config import settings
 
 DEEPSEEK_URL = "https://api.deepseek.com/chat/completions"
+
+# Each risk hint is short; the per-item cap keeps the prompt (and thus the
+# model spend) bounded even if a client sends many verbose hints.
+_RISK_HINT = Annotated[str, StringConstraints(max_length=200)]
+
 
 # ── Internal schemas (not exposed outside this tool) ──
 
@@ -20,7 +26,7 @@ class AnalyzeTaskInput(BaseModel):
     raw_task: str = Field(min_length=1, max_length=4000)
     context: str = Field(default="", max_length=4000)
     task_type: str = Field(default="feature", max_length=20)
-    risk_hints: list[str] = Field(default_factory=list, max_length=12)
+    risk_hints: list[_RISK_HINT] = Field(default_factory=list, max_length=12)
     model: str = Field(min_length=1, max_length=64)
     session_api_key: str = Field(default="", max_length=256)
 
@@ -184,8 +190,12 @@ async def analyze_with_deepseek(input_data: AnalyzeTaskInput) -> TaskAnalysis:
         raise DeepSeekClientError("无法连接 DeepSeek API") from exc
 
     if response.status_code >= 400:
+        # Include the upstream detail (truncated) so operators can diagnose
+        # auth/quota errors without a network trace.
+        detail = (response.text or "").strip()[:300]
+        suffix = f": {detail}" if detail else ""
         raise DeepSeekClientError(
-            f"DeepSeek API 返回错误：HTTP {response.status_code}"
+            f"DeepSeek API 返回错误：HTTP {response.status_code}{suffix}"
         )
 
     try:

@@ -15,8 +15,10 @@ from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import settings
 from app.core.errors import AppError, NotFoundError, RateLimitError, ok
 from app.core.ratelimit import is_allowed
+from app.core.redact import redact
 from app.db.session import get_db
 from app.services.audit import log_tool_call
 from app.tools.registry import tool_registry
@@ -34,18 +36,25 @@ class ToolInvokeRequest(BaseModel):
 
 
 def _client_ip(request: Request) -> str:
-    """Best-effort client identifier: real IP, else forwarded header, else unknown."""
-    forwarded = request.headers.get("x-forwarded-for")
-    if forwarded:
-        first = forwarded.split(",")[0].strip()
-        if first:
-            return first
+    """Best-effort client identifier.
+
+    ``X-Forwarded-For`` is only trusted when running behind a reverse proxy
+    (``TRUST_PROXY_HEADERS=true``); otherwise a client could spoof the header
+    to rotate identities and bypass per-IP rate limiting.
+    """
+    if settings.trust_proxy_headers:
+        forwarded = request.headers.get("x-forwarded-for")
+        if forwarded:
+            first = forwarded.split(",")[0].strip()
+            if first:
+                return first
     return request.client.host if request.client else "unknown"
 
 
 def _serialize(value: Any) -> str:
+    """Serialize a value for the audit log, redacting any secrets first."""
     try:
-        text = json.dumps(value, ensure_ascii=False, default=str)
+        text = json.dumps(redact(value), ensure_ascii=False, default=str)
     except (TypeError, ValueError):
         text = str(value)
     return text[:_AUDIT_CAP]

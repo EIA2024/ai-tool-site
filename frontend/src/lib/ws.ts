@@ -27,8 +27,13 @@ export class WsClient {
   }
 
   connect(sessionId?: string | null) {
-    if (this.ws) {
-      this.ws.close();
+    const prev = this.ws;
+    if (prev) {
+      // Detach the handler before closing: this is an intentional switch, so
+      // the old socket's onclose must not schedule a spurious reconnect that
+      // would close the fresh socket and loop forever.
+      prev.onclose = null;
+      prev.close();
     }
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);

@@ -4,9 +4,12 @@ Rate limiting is disabled for most tests; a dedicated test re-enables it with
 a low limit to exercise the 429 path deterministically.
 """
 
+from types import SimpleNamespace
+
 import pytest
 import pytest_asyncio
 
+from app.api.routes.tools import _client_ip
 from app.core import ratelimit
 from app.core.config import settings
 
@@ -173,3 +176,95 @@ async def test_rate_limit_429(api_client, monkeypatch):
     assert statuses[:3] == [200, 200, 200]
     assert statuses[3] == 429
     assert res.json()["error"]["code"] == "RATE_LIMITED"
+
+
+@pytest.mark.asyncio
+async def test_rate_limit_global_429(api_client, monkeypatch):
+    """The global budget caps spend across distinct clients/IPs."""
+    monkeypatch.setattr(settings, "rate_limit_enabled", True)
+    monkeypatch.setattr(settings, "rate_limit_per_minute", 100)
+    monkeypatch.setattr(settings, "rate_limit_global_per_minute", 2)
+    monkeypatch.setattr(ratelimit, "_redis_ok", False)
+    ratelimit._memory.clear()
+
+    statuses = []
+    for ip in ("1.1.1.1", "2.2.2.2", "3.3.3.3"):
+        res = await api_client.post(
+            "/api/tools/blank_tool/invoke",
+            json={"payload": {"input": "x"}},
+            headers={"x-forwarded-for": ip},
+        )
+        statuses.append(res.status_code)
+
+    assert statuses[:2] == [200, 200]
+    assert statuses[2] == 429
+
+
+@pytest.mark.asyncio
+async def test_audit_log_redacts_secrets(api_client):
+    """Live credentials in an invoke payload must never reach the audit log."""
+    await api_client.post(
+        "/api/tools/blank_tool/invoke",
+        json={
+            "payload": {
+                "input": "hi",
+                "session_api_key": "sk-very-secret-key",
+                "api_key": "another-secret",
+            }
+        },
+    )
+    res = await api_client.get("/api/audit/tool-calls?tool_id=blank_tool&limit=1")
+    body = res.json()
+    assert body["success"] is True
+    record = body["data"]["records"][0]
+    assert "sk-very-secret-key" not in record["input_data"]
+    assert "another-secret" not in record["input_data"]
+    assert "[REDACTED]" in record["input_data"]
+
+
+@pytest.mark.asyncio
+async def test_invoke_coerces_non_string_input(api_client):
+    res = await api_client.post(
+        "/api/tools/blank_tool/invoke", json={"payload": {"input": 123}}
+    )
+    assert res.status_code == 200
+    body = res.json()
+    assert body["success"] is True
+    assert body["data"]["echo"] == "123"
+
+
+@pytest.mark.asyncio
+async def test_chat_message_coerces_non_string_content(api_client):
+    res = await api_client.post(
+        "/api/chat/sessions", json={"title": "coerce"}
+    )
+    session_id = res.json()["data"]["session"]["id"]
+    res = await api_client.post(
+        f"/api/chat/sessions/{session_id}/messages",
+        json={"content": 12345, "role": "user"},
+    )
+    assert res.status_code == 200
+    assert res.json()["data"]["message"]["content"] == "12345"
+
+
+@pytest.mark.asyncio
+async def test_request_body_size_capped(api_client):
+    huge = {"payload": {"input": "x" * 2_000_000}}
+    res = await api_client.post(
+        "/api/tools/blank_tool/invoke",
+        content=__import__("json").dumps(huge),
+        headers={"content-type": "application/json"},
+    )
+    assert res.status_code == 413
+
+
+@pytest.mark.asyncio
+async def test_client_ip_respects_proxy_trust_setting(monkeypatch):
+    fake = SimpleNamespace(
+        headers={"x-forwarded-for": "9.9.9.9"}, client=SimpleNamespace(host="1.1.1.1")
+    )
+    monkeypatch.setattr(settings, "trust_proxy_headers", False)
+    assert _client_ip(fake) == "1.1.1.1"  # spoofed XFF ignored
+
+    monkeypatch.setattr(settings, "trust_proxy_headers", True)
+    assert _client_ip(fake) == "9.9.9.9"  # trusted proxy path used

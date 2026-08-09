@@ -51,9 +51,15 @@ services:
       REDIS_URL: redis://redis:6379/0
       APP_CORS_ORIGINS: ${APP_CORS_ORIGINS:-http://localhost:5173}
       DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
-      DEEPSEEK_MODELS: ${DEEPSEEK_MODELS:-}
-      DEEPSEEK_DEFAULT_MODEL: ${DEEPSEEK_DEFAULT_MODEL:-}
+      # Defaults keep the container working even when the root .env omits
+      # these; an empty value would override the Settings default and fail
+      # the startup model validation.
+      DEEPSEEK_MODELS: ${DEEPSEEK_MODELS:-deepseek-v4-flash,deepseek-v4-pro}
+      DEEPSEEK_DEFAULT_MODEL: ${DEEPSEEK_DEFAULT_MODEL:-deepseek-v4-flash}
       RATE_LIMIT_ENABLED: ${RATE_LIMIT_ENABLED:-true}
+      RATE_LIMIT_PER_MINUTE: ${RATE_LIMIT_PER_MINUTE:-20}
+      RATE_LIMIT_GLOBAL_PER_MINUTE: ${RATE_LIMIT_GLOBAL_PER_MINUTE:-200}
+      TRUST_PROXY_HEADERS: ${TRUST_PROXY_HEADERS:-false}
     depends_on:
       postgres:
         condition: service_healthy

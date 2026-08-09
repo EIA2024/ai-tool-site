@@ -30,7 +30,7 @@ app = FastAPI(
 # ── CORS ──────────────────────────────────────────────────────────────
 # Explicit allow-list only. `allow_credentials=True` + a wildcard origin is
 # rejected by browsers, so we fail fast rather than deploy a broken config.
-_ALLOWED_METHODS = ["GET", "POST", "OPTIONS"]
+_ALLOWED_METHODS = ["GET", "POST", "DELETE", "OPTIONS"]
 _ALLOWED_HEADERS = ["Content-Type", "Authorization", "Accept"]
 
 origins = settings.cors_origins_list
@@ -47,6 +47,23 @@ app.add_middleware(
     allow_methods=_ALLOWED_METHODS,
     allow_headers=_ALLOWED_HEADERS,
 )
+
+
+# ── Request body size cap ──────────────────────────────────────────────
+# A tool payload is at most a few KB of text; the cap is purely an abuse
+# guard so a multi-MB body is rejected before FastAPI buffers it. Covers the
+# common client cases (curl, scripts, browsers all send Content-Length).
+# Registered first so the security-header middleware (added below) still
+# wraps the 413 response.
+_MAX_BODY_BYTES = 1_000_000
+
+
+@app.middleware("http")
+async def limit_body_size(request: Request, call_next):
+    length = request.headers.get("content-length")
+    if length and length.isdigit() and int(length) > _MAX_BODY_BYTES:
+        return JSONResponse(status_code=413, content={"detail": "request body too large"})
+    return await call_next(request)
 
 
 # ── Security response headers ─────────────────────────────────────────

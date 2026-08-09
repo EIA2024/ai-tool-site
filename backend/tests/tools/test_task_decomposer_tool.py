@@ -69,6 +69,57 @@ async def test_analyze_task_unsupported_model(db):
 
 
 @pytest.mark.asyncio
+async def test_analyze_task_oversized_risk_hint_rejected(db):
+    """A single risk hint over the 200-char cap is rejected before any API call."""
+    with pytest.raises(ValidationError) as excinfo:
+        await tool.handle_invoke(
+            {
+                "action": "analyze_task",
+                "raw_task": "task",
+                "model": "deepseek-v4-flash",
+                "risk_hints": ["x" * 300],
+            },
+            db,
+        )
+    assert excinfo.value.code == "VALIDATION_ERROR"
+
+
+@pytest.mark.asyncio
+async def test_analyze_task_coerces_numeric_raw_task(db, monkeypatch):
+    """A numeric raw_task is coerced to a string instead of 500ing."""
+    monkeypatch.setattr(
+        "app.tools.modules.task_decomposer_client.settings.deepseek_api_key", "sk-x"
+    )
+    monkeypatch.setattr(
+        "app.tools.modules.task_decomposer.analyze_with_deepseek",
+        _fake_analyze,
+    )
+    result = await tool.handle_invoke(
+        {"action": "analyze_task", "raw_task": 12345, "model": "deepseek-v4-flash"},
+        db,
+    )
+    assert result["analysis"]["goal"] == "fake"
+
+
+async def _fake_analyze(input_data):
+    """Stands in for analyze_with_deepseek so the test needs no network."""
+    from app.tools.modules.task_decomposer_client import TaskAnalysis
+
+    return TaskAnalysis(
+        goal="fake",
+        context=["c"],
+        constraints=["c"],
+        done_when=["d"],
+        failure_cases=["f"],
+        verification=["v"],
+        missing_questions=[],
+        risk_level="low",
+        non_goals=[],
+        agent_prompt="p",
+    )
+
+
+@pytest.mark.asyncio
 async def test_analyze_task_no_api_key(db, monkeypatch):
     """Without .env key or session key, the client error surfaces as ProviderError."""
     monkeypatch.setattr(

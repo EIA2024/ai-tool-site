@@ -38,6 +38,14 @@ class Settings(BaseSettings):
     # Security / rate limiting
     rate_limit_enabled: bool = True
     rate_limit_per_minute: int = 20
+    # Total invoke budget across all clients per minute. Bounds worst-case
+    # DeepSeek spend even if clients rotate IPs or hide behind a shared proxy.
+    rate_limit_global_per_minute: int = 200
+    # When running behind a reverse proxy (e.g. nginx/traefik) that overwrites
+    # X-Forwarded-For, set this to true so per-IP limits use the real client.
+    # Keep it false when the app is directly reachable — otherwise a client
+    # can spoof the header and bypass per-IP rate limiting.
+    trust_proxy_headers: bool = False
 
     model_config = SettingsConfigDict(
         env_file=(
@@ -71,6 +79,8 @@ class Settings(BaseSettings):
                 )
             if not self.cors_origins_list:
                 raise ValueError("APP_CORS_ORIGINS must be set when APP_ENV=production")
+            if self.rate_limit_global_per_minute <= 0:
+                raise ValueError("RATE_LIMIT_GLOBAL_PER_MINUTE must be > 0")
         return self
 
 

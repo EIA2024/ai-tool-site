@@ -101,7 +101,7 @@ async def add_rest_message(
     session_id: str, body: dict, db: AsyncSession = Depends(get_db)
 ):
     """REST fallback for posting a single user message (WS is primary)."""
-    content = body.get("content", "")
+    content = str(body.get("content") or "")
     role = body.get("role", "user")
     if not content or len(content) > 10000:
         raise ValidationError("content 必须非空且不超过 10000 字符")

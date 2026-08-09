@@ -2,9 +2,9 @@
 
 Falls back to a file-based SQLite database when DATABASE_URL is not set
 (so the whole stack works without Postgres/Redis), then starts uvicorn with
-auto-reload. Run from the ``backend/`` directory:
+auto-reload. Run from anywhere in the repo:
 
-    python run_dev.py
+    python backend/run_dev.py
 """
 
 import asyncio
@@ -12,10 +12,15 @@ import os
 import sys
 from pathlib import Path
 
-os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite:///./dev.db")
+# Anchor the dev database to this file's directory so it does not depend on
+# the CWD the server happens to be launched from.
+_BACKEND_DIR = Path(__file__).resolve().parent
+os.environ.setdefault(
+    "DATABASE_URL", f"sqlite+aiosqlite:///{(_BACKEND_DIR / 'dev.db').as_posix()}"
+)
 
 # Make the backend package importable regardless of CWD.
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(_BACKEND_DIR))
 
 
 async def _init_db() -> None:

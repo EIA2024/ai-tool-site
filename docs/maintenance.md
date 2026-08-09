@@ -942,6 +942,10 @@ echo "=== 维护完成 ==="
 | `POSTGRES_PASSWORD` | postgres | 数据库密码 |
 | `POSTGRES_DB` | ai_tool_site | 数据库名 |
 | `REDIS_URL` | redis://localhost:6379/0 | Redis 连接字符串 |
+| `RATE_LIMIT_ENABLED` | true | 是否启用调用频率限制 |
+| `RATE_LIMIT_PER_MINUTE` | 20 | 每 IP 每分钟允许的调用次数 |
+| `RATE_LIMIT_GLOBAL_PER_MINUTE` | 200 | 全站每分钟总调用预算（上限 DeepSeek 花费） |
+| `TRUST_PROXY_HEADERS` | false | 仅在反向代理之后设为 true，信任 `X-Forwarded-For` |
 | `BACKEND_PORT` | 8000 | 后端端口 |
 | `FRONTEND_PORT` | 5173 | 前端端口 |
 | `VITE_API_BASE` | `/api` | 前端 API 基础 URL（Docker 构建时设为 `http://localhost:8000/api`） |
@@ -954,22 +958,6 @@ echo "=== 维护完成 ==="
 ---
 
 ## 11. 已知问题
-
-### NavBar 链接路径与路由不匹配
-
-NavBar (`frontend/src/components/layout/NavBar.tsx`) 中的链接使用连字符风格：
-
-```tsx
-<Link to="/tools/blank-tool">Blank Tool</Link>
-```
-
-但 `App.tsx` 中的路由定义使用下划线：
-
-```tsx
-<Route path="/tools/blank_tool" element={<BlankToolPage />} />
-```
-
-浏览器打开 `/tools/blank-tool` 会显示 `No routes matched location`。修复合一即可。
 
 ### Docker 模式下首次迁移失败
 

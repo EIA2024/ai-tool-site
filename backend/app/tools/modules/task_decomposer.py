@@ -71,7 +71,7 @@ class TaskDecomposerTool(BaseTool):
         return {"deleted": True}
 
     async def _analyze_task(self, db: AsyncSession, payload: dict) -> dict:
-        raw_task = payload.get("raw_task", "").strip()
+        raw_task = str(payload.get("raw_task") or "").strip()
         if not raw_task:
             raise ValidationError("请先输入原始任务")
 
@@ -84,11 +84,11 @@ class TaskDecomposerTool(BaseTool):
         try:
             input_data = AnalyzeTaskInput(
                 raw_task=raw_task,
-                context=payload.get("context", ""),
-                task_type=payload.get("task_type", "feature"),
+                context=str(payload.get("context") or ""),
+                task_type=str(payload.get("task_type") or "feature"),
                 risk_hints=payload.get("risk_hints", []) or [],
-                model=model,
-                session_api_key=payload.get("session_api_key", ""),
+                model=str(model),
+                session_api_key=str(payload.get("session_api_key") or ""),
             )
         except PydanticValidationError as exc:
             raise ValidationError(f"输入校验失败：{exc}") from exc
@@ -127,7 +127,7 @@ class TaskDecomposerTool(BaseTool):
 
 
 def _require_id(payload: dict) -> str:
-    record_id = payload.get("id", "")
+    record_id = str(payload.get("id") or "")
     if not record_id:
         raise ValidationError("Missing required field: id")
     if len(record_id) > 64:

@@ -66,14 +66,16 @@ class CodeAgentFlowVizTool(BaseTool):
         return record
 
 
-def _bounded(value: str, field: str) -> str:
-    if len(value) > 10000:
+def _bounded(value, field: str) -> str:
+    """Coerce to str (clients may send numbers/null) and cap the length."""
+    text = str(value or "")
+    if len(text) > 10000:
         raise ValidationError(f"{field} 超过最大长度 10000")
-    return value
+    return text
 
 
 def _require_id(payload: dict) -> str:
-    record_id = payload.get("id", "")
+    record_id = str(payload.get("id") or "")
     if not record_id:
         raise ValidationError("Missing required field: id")
     if len(record_id) > 64:

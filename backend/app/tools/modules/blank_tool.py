@@ -11,7 +11,7 @@ class BlankTool(BaseTool):
     mode = "request-response"
 
     async def handle_invoke(self, payload: dict, db: AsyncSession) -> dict:
-        user_input = payload.get("input", "")
+        user_input = str(payload.get("input") or "")
         if len(user_input) > 4000:
             raise ValidationError("input 超过最大长度 4000")
         return {
