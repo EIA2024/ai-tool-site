@@ -1,7 +1,7 @@
 """Task Decomposer tool module.
 
 Provides:
-- analyze_task: call DeepSeek to decompose a task, save to history
+- analyze_task: call DeepSeek to decompose a task, save to history (best-effort)
 - list_history: list saved analyses
 - get_history: get a single analysis
 - delete_history: delete an analysis
@@ -9,7 +9,11 @@ Provides:
 
 import logging
 
-from app.db.session import async_session_factory
+from pydantic import ValidationError as PydanticValidationError
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.core.config import settings
+from app.core.errors import NotFoundError, ProviderError, ValidationError
 from app.services.task_decomposer_history import (
     create_history,
     delete_history,
@@ -25,6 +29,8 @@ from app.tools.modules.task_decomposer_client import (
 
 logger = logging.getLogger(__name__)
 
+_SUPPORTED_ACTIONS = ("analyze_task", "list_history", "get_history", "delete_history")
+
 
 class TaskDecomposerTool(BaseTool):
     tool_id = "task_decomposer"
@@ -32,152 +38,98 @@ class TaskDecomposerTool(BaseTool):
     description = "Break down vague development tasks into structured Coding Agent task cards using DeepSeek"
     mode = "request-response"
 
-    async def handle_invoke(self, payload: dict) -> dict:
+    def config(self) -> dict:
+        return {
+            "supported_actions": list(_SUPPORTED_ACTIONS),
+            "models": settings.deepseek_models_list,
+            "default_model": settings.deepseek_default_model,
+        }
+
+    async def handle_invoke(self, payload: dict, db: AsyncSession) -> dict:
         action = payload.get("action", "")
-        if action not in ("analyze_task", "list_history", "get_history", "delete_history"):
-            return {
-                "success": False,
-                "error": {
-                    "code": "UNKNOWN_ACTION",
-                    "message": (
-                        f"Unknown action: '{action}'. Supported: "
-                        "analyze_task, list_history, get_history, delete_history."
-                    ),
-                },
-            }
+        if action not in _SUPPORTED_ACTIONS:
+            raise ValidationError(
+                f"Unknown action: '{action}'. Supported: "
+                + ", ".join(_SUPPORTED_ACTIONS) + "."
+            )
 
-        try:
-            if action == "analyze_task":
-                return await self._analyze_task(payload)
-            async with async_session_factory() as db:
-                if action == "list_history":
-                    return await self._list_history(db, payload)
-                elif action == "get_history":
-                    return await self._get_history(db, payload)
-                elif action == "delete_history":
-                    return await self._delete_history(db, payload)
-        except Exception as e:
-            logger.exception("TaskDecomposerTool error for action=%s", action)
-            return {
-                "success": False,
-                "error": {
-                    "code": "INTERNAL_ERROR",
-                    "message": str(e),
-                },
-            }
+        if action == "analyze_task":
+            return await self._analyze_task(db, payload)
+        if action == "list_history":
+            task_type = payload.get("task_type") or None
+            records = await list_history(db, task_type=task_type)
+            return {"records": [_history_to_dict(r) for r in records]}
+        if action == "get_history":
+            return {"record": _history_to_dict(await self._get_history(db, payload))}
+        # delete_history
+        deleted = await delete_history(db, _require_id(payload))
+        if not deleted:
+            raise NotFoundError("Record not found")
+        return {"deleted": True}
 
-    async def _analyze_task(self, payload: dict) -> dict:
+    async def _analyze_task(self, db: AsyncSession, payload: dict) -> dict:
         raw_task = payload.get("raw_task", "").strip()
         if not raw_task:
-            return {
-                "success": False,
-                "error": {
-                    "code": "VALIDATION_ERROR",
-                    "message": "请先输入原始任务",
-                },
-            }
+            raise ValidationError("请先输入原始任务")
 
-        input_data = AnalyzeTaskInput(
-            raw_task=raw_task,
-            context=payload.get("context", ""),
-            task_type=payload.get("task_type", "feature"),
-            risk_hints=payload.get("risk_hints", []),
-            model=payload.get("model", "deepseek-v4-flash"),
-            session_api_key=payload.get("session_api_key", ""),
-        )
+        model = payload.get("model") or settings.deepseek_default_model
+        if model not in settings.deepseek_models_list:
+            raise ValidationError(
+                f"不支持的模型 '{model}'。可选：{', '.join(settings.deepseek_models_list)}"
+            )
+
+        try:
+            input_data = AnalyzeTaskInput(
+                raw_task=raw_task,
+                context=payload.get("context", ""),
+                task_type=payload.get("task_type", "feature"),
+                risk_hints=payload.get("risk_hints", []) or [],
+                model=model,
+                session_api_key=payload.get("session_api_key", ""),
+            )
+        except PydanticValidationError as exc:
+            raise ValidationError(f"输入校验失败：{exc}") from exc
 
         try:
             analysis = await analyze_with_deepseek(input_data)
-        except DeepSeekClientError as e:
-            return {
-                "success": False,
-                "error": {
-                    "code": "DEEPSEEK_ERROR",
-                    "message": str(e),
-                },
-            }
+        except DeepSeekClientError as exc:
+            raise ProviderError(str(exc), code="DEEPSEEK_ERROR") from exc
 
-        # Save to history (fire-and-forget style — errors don't fail the response)
+        # Persist history best-effort: an analysis produced by the model is
+        # too expensive to lose because the history insert failed. On failure
+        # roll back this request's session (fresh per request) so the router
+        # commit is a clean no-op, then still return the analysis.
         try:
-            async with async_session_factory() as db:
-                await create_history(
-                    db=db,
-                    raw_task=input_data.raw_task,
-                    context=input_data.context,
-                    task_type=input_data.task_type,
-                    model_name=input_data.model,
-                    risk_hints=input_data.risk_hints,
-                    risk_level=analysis.risk_level,
-                    structured_output=analysis.model_dump(),
-                )
-        except Exception as e:
-            logger.warning("Failed to save analysis history: %s", e)
+            await create_history(
+                db=db,
+                raw_task=input_data.raw_task,
+                context=input_data.context,
+                task_type=input_data.task_type,
+                model_name=input_data.model,
+                risk_hints=input_data.risk_hints,
+                risk_level=analysis.risk_level,
+                structured_output=analysis.model_dump(),
+            )
+        except Exception as exc:
+            logger.warning("Failed to save analysis history: %s", exc)
+            await db.rollback()
 
-        return {
-            "success": True,
-            "data": {
-                "analysis": _analysis_to_dict(analysis),
-                "model": input_data.model,
-            },
-        }
+        return {"analysis": _analysis_to_dict(analysis), "model": input_data.model}
 
-    async def _list_history(self, db, payload: dict) -> dict:
-        task_type = payload.get("task_type") or None
-        records = await list_history(db, task_type=task_type)
-        return {
-            "success": True,
-            "data": {
-                "records": [_history_to_dict(r) for r in records],
-            },
-        }
-
-    async def _get_history(self, db, payload: dict) -> dict:
-        record_id = payload.get("id", "")
-        if not record_id:
-            return {
-                "success": False,
-                "error": {
-                    "code": "VALIDATION_ERROR",
-                    "message": "Missing required field: id",
-                },
-            }
-        record = await get_history(db, record_id)
+    async def _get_history(self, db: AsyncSession, payload: dict):
+        record = await get_history(db, _require_id(payload))
         if record is None:
-            return {
-                "success": False,
-                "error": {
-                    "code": "NOT_FOUND",
-                    "message": f"Record '{record_id}' not found",
-                },
-            }
-        return {
-            "success": True,
-            "data": {"record": _history_to_dict(record)},
-        }
+            raise NotFoundError("Record not found")
+        return record
 
-    async def _delete_history(self, db, payload: dict) -> dict:
-        record_id = payload.get("id", "")
-        if not record_id:
-            return {
-                "success": False,
-                "error": {
-                    "code": "VALIDATION_ERROR",
-                    "message": "Missing required field: id",
-                },
-            }
-        deleted = await delete_history(db, record_id)
-        if not deleted:
-            return {
-                "success": False,
-                "error": {
-                    "code": "NOT_FOUND",
-                    "message": f"Record '{record_id}' not found",
-                },
-            }
-        return {
-            "success": True,
-            "data": {"deleted": True},
-        }
+
+def _require_id(payload: dict) -> str:
+    record_id = payload.get("id", "")
+    if not record_id:
+        raise ValidationError("Missing required field: id")
+    if len(record_id) > 64:
+        raise ValidationError("id 超过最大长度 64")
+    return record_id
 
 
 def _analysis_to_dict(analysis) -> dict:

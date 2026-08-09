@@ -6,6 +6,40 @@
 # Optional sibling worktree root when configured inside the repository
 .workflow-worktrees/
 
-# Common local artifacts
+# ── Secrets ────────────────────────────────────────────────────────────
+# Never commit environment files — they contain API keys and DB credentials.
+.env
+.env.*
+!.env.example
+**/.env
+**/.env.*
+!**/.env.example
+
+# ── Python ─────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# ── Node / frontend ────────────────────────────────────────────────────
+node_modules/
+dist/
+dist-ssr/
+*.local
+
+# ── Claude Code session artifacts (not part of the project) ────────────
+.claude/
+
+# ── Editor / OS ────────────────────────────────────────────────────────
+.vscode/
+.idea/
 .DS_Store
 Thumbs.db
+*.swp
+
+# ── Local scratch files ────────────────────────────────────────────────
+tmp_*.html

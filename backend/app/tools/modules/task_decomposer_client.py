@@ -21,7 +21,7 @@ class AnalyzeTaskInput(BaseModel):
     context: str = Field(default="", max_length=4000)
     task_type: str = Field(default="feature", max_length=20)
     risk_hints: list[str] = Field(default_factory=list, max_length=12)
-    model: str = Field(default="deepseek-v4-flash", max_length=64)
+    model: str = Field(min_length=1, max_length=64)
     session_api_key: str = Field(default="", max_length=256)
 
 
@@ -150,6 +150,10 @@ def _resolve_api_key(input_data: AnalyzeTaskInput) -> str:
     if settings.deepseek_api_key:
         return settings.deepseek_api_key
     if input_data.session_api_key:
+        if not input_data.session_api_key.startswith("sk-"):
+            raise DeepSeekClientError(
+                "会话 API Key 格式无效：必须以 'sk-' 开头，或改用 .env 中的服务端 Key。"
+            )
         return input_data.session_api_key
     raise DeepSeekClientError("未配置 DeepSeek API Key。请在 .env 中设置，或在页面输入临时 Key。")
 

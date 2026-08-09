@@ -1,8 +1,6 @@
-"""CRUD service for Task Decomposer analysis history."""
+"""CRUD for Task Decomposer analysis history (unit-of-work: no commits here)."""
 
-from datetime import datetime
-
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import TaskAnalysisHistory
@@ -28,8 +26,7 @@ async def create_history(
         structured_output=structured_output,
     )
     db.add(record)
-    await db.commit()
-    await db.refresh(record)
+    await db.flush()
     return record
 
 
@@ -37,13 +34,24 @@ async def list_history(
     db: AsyncSession,
     task_type: str | None = None,
     limit: int = 50,
+    offset: int = 0,
 ) -> list[TaskAnalysisHistory]:
     query = select(TaskAnalysisHistory).order_by(TaskAnalysisHistory.created_at.desc())
     if task_type:
         query = query.where(TaskAnalysisHistory.task_type == task_type)
-    query = query.limit(limit)
+    query = query.offset(offset).limit(limit)
     result = await db.execute(query)
     return list(result.scalars().all())
+
+
+async def count_history(
+    db: AsyncSession, task_type: str | None = None
+) -> int:
+    query = select(func.count()).select_from(TaskAnalysisHistory)
+    if task_type:
+        query = query.where(TaskAnalysisHistory.task_type == task_type)
+    result = await db.execute(query)
+    return int(result.scalar_one())
 
 
 async def get_history(db: AsyncSession, record_id: str) -> TaskAnalysisHistory | None:
@@ -58,5 +66,4 @@ async def delete_history(db: AsyncSession, record_id: str) -> bool:
     if record is None:
         return False
     await db.delete(record)
-    await db.commit()
     return True

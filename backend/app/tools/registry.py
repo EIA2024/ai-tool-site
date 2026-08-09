@@ -18,6 +18,10 @@ class ToolRegistry:
     def list_tools(self) -> list[BaseTool]:
         return list(self._tools.values())
 
+    def list_tool_metadata(self) -> list[dict]:
+        """Public metadata for the tools listing endpoint (id/name/desc/mode/config)."""
+        return [tool.metadata() | {"config": tool.config()} for tool in self.list_tools()]
+
 
 tool_registry = ToolRegistry()
 
