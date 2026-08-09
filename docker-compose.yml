@@ -1,3 +1,11 @@
+# AI Tool Site — full-stack local deployment.
+#
+# Reads environment overrides from the repository-root `.env` (docker compose
+# loads it automatically). At minimum set DEEPSEEK_API_KEY there.
+#
+# For local-only development without Docker, `backend/run_dev.py` runs the
+# whole backend against a file-based SQLite database (no Postgres/Redis).
+
 services:
   postgres:
     image: postgres:16-alpine
@@ -5,6 +13,7 @@ services:
       POSTGRES_USER: ${POSTGRES_USER:-postgres}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
       POSTGRES_DB: ${POSTGRES_DB:-ai_tool_site}
+    # Ports are exposed for host tooling (psql, GUI). Remove for production.
     ports:
       - "${POSTGRES_PORT:-5432}:5432"
     volumes:
@@ -14,9 +23,11 @@ services:
       interval: 5s
       timeout: 5s
       retries: 5
+    restart: unless-stopped
 
   redis:
     image: redis:7-alpine
+    # Exposed so the host can inspect cache state. Remove for production.
     ports:
       - "${REDIS_PORT:-6379}:6379"
     volumes:
@@ -26,6 +37,7 @@ services:
       interval: 5s
       timeout: 5s
       retries: 5
+    restart: unless-stopped
 
   backend:
     build:
@@ -34,28 +46,44 @@ services:
     ports:
       - "${BACKEND_PORT:-8000}:8000"
     environment:
+      APP_ENV: ${APP_ENV:-dev}
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-ai_tool_site}
       REDIS_URL: redis://redis:6379/0
-      APP_CORS_ORIGINS: http://localhost:${FRONTEND_PORT:-5173}
+      APP_CORS_ORIGINS: ${APP_CORS_ORIGINS:-http://localhost:5173}
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
+      DEEPSEEK_MODELS: ${DEEPSEEK_MODELS:-}
+      DEEPSEEK_DEFAULT_MODEL: ${DEEPSEEK_DEFAULT_MODEL:-}
+      RATE_LIMIT_ENABLED: ${RATE_LIMIT_ENABLED:-true}
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
-    volumes:
-      - ./backend:/app
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/api/health', timeout=3).status==200 else 1)"
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
 
   frontend:
     build:
       context: ./frontend
-      args:
-        VITE_API_BASE: http://localhost:8000/api
-      target: runner
       dockerfile: Dockerfile
+      args:
+        # Browser-side base URL for API calls. With the backend port published
+        # on the host, localhost works for local use; override for remote hosts.
+        VITE_API_BASE: ${VITE_API_BASE:-http://localhost:8000/api}
     ports:
       - "${FRONTEND_PORT:-5173}:5173"
     depends_on:
-      - backend
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
 
 volumes:
   pgdata:

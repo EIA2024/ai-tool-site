@@ -73,7 +73,19 @@ docker compose exec backend alembic upgrade head
 
 ### 本地开发（无 Docker）
 
-**后端：**
+**后端（推荐，使用 SQLite，无需 PostgreSQL/Redis）：**
+
+```bash
+cd backend
+python -m venv venv
+source venv/bin/activate  # Windows: venv\Scripts\activate
+pip install -r requirements-dev.txt
+
+# 自动创建 SQLite 数据库并启动带热重载的 uvicorn
+python run_dev.py
+```
+
+**后端（完整模式，需要 PostgreSQL 和 Redis）：**
 
 ```bash
 cd backend
@@ -98,7 +110,11 @@ npm run dev
 新工具只需继承 `BaseTool` 并注册到 `ToolRegistry`：
 
 ```python
+from sqlalchemy.ext.asyncio import AsyncSession
+
 from app.tools.base import BaseTool
+from app.core.errors import ToolError
+
 
 class MyTool(BaseTool):
     tool_id = "my_tool"
@@ -106,19 +122,22 @@ class MyTool(BaseTool):
     description = "My custom AI tool"
     mode = "request-response"
 
-    async def handle_invoke(self, payload: dict) -> dict:
-        # 你的工具逻辑
-        return {"success": True, "data": {...}}
+    async def handle_invoke(self, payload: dict, db: AsyncSession) -> dict:
+        # 你的工具逻辑。返回成功的 data 载荷（不带信封）；
+        # 预期的业务失败通过抛出 ToolError 表示。
+        if not payload.get("input"):
+            raise ToolError("input is required", code="INVALID_INPUT")
+        return {"result": payload["input"]}
 
 # 在 registry.py 中注册
 tool_registry.register(MyTool())
 ```
 
-前端对应添加页面并配置路由即可。
+前端对应添加页面并配置路由即可。关于返回数据 / 错误处理 / 数据库持久化的约定，详见 [AI 工具开发手册](docs/ai-tool-development-handbook.md)。
 
 ## 项目工作流
 
-本项目的开发遵循一套 Prompt-native 的 AI 协作工作流（详见 `.agent-workspace/`），包括 Context 收集、Intent 确认、计划、执行、独立 Review 等阶段。
+本项目的开发遵循一套 Prompt-native 的 AI 协作工作流（详见 `.workflow/`），包括 Context 收集、Intent 确认、计划、执行、独立 Review 等阶段。
 
 ## 文档
 

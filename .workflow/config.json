@@ -1,6 +1,6 @@
 {
   "schema_version": 2,
-  "base_branch": "main",
+  "base_branch": "master",
   "workflow_branch_prefix": "workflow/",
   "integration_branch_prefix": "integration/",
   "worktree_root": "../.workflow-worktrees",

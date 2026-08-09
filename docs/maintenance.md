@@ -735,14 +735,12 @@ cd frontend && npm audit
 # 绝不要硬编码 API 密钥 ✋
 # backend/app/core/config.py
 class Settings(BaseSettings):
-    openai_api_key: str = ""    # 通过 .env 或环境变量注入
-    anthropic_api_key: str = ""
+    deepseek_api_key: str = ""    # 通过 .env 或环境变量注入
 ```
 
 ```bash
 # Linux 生产环境通过 systemd 或 Docker 环境变量注入
-export OPENAI_API_KEY=sk-...
-export ANTHROPIC_API_KEY=sk-ant-...
+export DEEPSEEK_API_KEY=sk-...
 docker compose up -d
 ```
 

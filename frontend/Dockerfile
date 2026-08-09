@@ -12,6 +12,9 @@ RUN npm run build
 FROM node:22-alpine AS runner
 WORKDIR /app
 COPY --from=builder /app/dist /app/dist
-RUN npm install -g serve
+RUN npm install -g serve \
+    && adduser -D -H -u 1000 appuser \
+    && chown -R appuser:appuser /app
+USER appuser
 EXPOSE 5173
 CMD ["serve", "-s", "dist", "-l", "5173"]

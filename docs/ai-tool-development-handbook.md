@@ -202,7 +202,10 @@ The fastest path to add a new AI tool. Takes ~5 minutes.
 Create `backend/app/tools/modules/translator.py`:
 
 ```python
+from sqlalchemy.ext.asyncio import AsyncSession
+
 from app.tools.base import BaseTool
+from app.core.errors import ValidationError
 
 
 class TranslatorTool(BaseTool):
@@ -211,22 +214,25 @@ class TranslatorTool(BaseTool):
     description = "Translate text between languages using AI"
     mode = "request-response"
 
-    async def handle_invoke(self, payload: dict) -> dict:
+    async def handle_invoke(self, payload: dict, db: AsyncSession) -> dict:
         text = payload.get("text", "")
         source_lang = payload.get("source_lang", "auto")
         target_lang = payload.get("target_lang", "English")
 
-        # ★ Replace with real AI API call
+        # Raise a typed error for expected business failures; the router
+        # turns it into {"success": false, "error": {...}}.
+        if not text:
+            raise ValidationError("text is required", code="EMPTY_TEXT")
+
+        # ★ Replace with real AI API call (see section 7)
         translated = f"[AI would translate: {text} from {source_lang} to {target_lang}]"
 
+        # Return the success data payload only — no envelope, no commit.
         return {
-            "success": True,
-            "data": {
-                "original": text,
-                "translated": translated,
-                "source_lang": source_lang,
-                "target_lang": target_lang,
-            },
+            "original": text,
+            "translated": translated,
+            "source_lang": source_lang,
+            "target_lang": target_lang,
         }
 ```
 
@@ -319,52 +325,58 @@ class BaseTool(ABC):
     description: str      # Description shown in tool list
     mode: str             # "request-response" or "realtime"
 
-    async def handle_invoke(self, payload: dict) -> dict:
-        """Process input and return results.
-        
+    async def handle_invoke(self, payload: dict, db: AsyncSession) -> dict:
+        """Execute the tool for one request.
+
         Args:
-            payload: JSON body from the frontend POST request.
-        
+            payload: the tool-specific payload from the client.
+            db:     request-scoped async session (injected — never create
+                    your own, never commit here).
+
         Returns:
-            dict with at least: {"success": bool, "data": {...}}
-            On error: {"success": False, "error": {"code": "...", "message": "..."}}
+            The success data payload only. The API layer wraps it in the
+            {"success": true, "data": ...} envelope.
         """
         ...
 ```
 
 ### Response Convention
 
-Always return this structure from `handle_invoke`:
+Return the data payload only from `handle_invoke` — no envelope:
 
 ```python
-# Success
+# Success — return this dict directly:
 {
-    "success": True,
-    "data": {
-        "result": "...",           # Primary output
-        "metadata": {...},         # Optional: extra info
-    }
+    "result": "...",           # Primary output
+    "metadata": {...},         # Optional: extra info
 }
 
-# Error
-{
-    "success": False,
-    "error": {
-        "code": "API_ERROR",       # Machine-readable error code
-        "message": "..."           # Human-readable description
-    }
-}
+# Error — raise a typed error instead of returning a failure dict:
+raise ValidationError("text is required", code="EMPTY_TEXT")
 ```
+
+The router converts both cases into the standard JSON envelope:
+
+```json
+{"success": true,  "data": {...}}
+{"success": false, "error": {"code": "VALIDATION_ERROR", "message": "..."}}
+```
+
+Available typed errors (see `app/core/errors.py`): `ValidationError`,
+`NotFoundError`, `ProviderError` (upstream AI/API failure), `RateLimitError`.
+`InternalError` (HTTP 500) is reserved for genuine server bugs — never raise
+it from a tool.
 
 ### Frontend: Calling the Tool
 
-Use the `post()` helper from `lib/api.ts`:
+Use the `invokeTool()` helper from `lib/api.ts` (it wraps the payload in the
+`{ "payload": ... }` request body automatically):
 
 ```typescript
-import { post } from "../../lib/api";
+import { invokeTool } from "../../lib/api";
 
 // POST /api/tools/{tool_id}/invoke
-const res = await post("/tools/translator/invoke", {
+const res = await invokeTool("translator", {
     text: "Hello world",
     target_lang: "French",
 });
@@ -376,7 +388,7 @@ if (res.success) {
 }
 ```
 
-The POST URL pattern is always: `/tools/{tool_id}/invoke` (the `/api` prefix is handled by the client).
+The POST URL pattern is always `/tools/{tool_id}/invoke` (the `/api` prefix is handled by the client).
 
 ---
 
@@ -433,7 +445,8 @@ app.include_router(stream_router, prefix="/ws")
 
 ### Frontend: Using WsClient
 
-The `WsClient` class handles connection lifecycle and auto-reconnect:
+The `WsClient` class handles connection lifecycle, exponential backoff
+reconnect, and optional session resume:
 
 ```typescript
 import { useRef, useState } from "react";
@@ -445,23 +458,27 @@ export default function StreamPage() {
   const [status, setStatus] = useState("disconnected");
   const clientRef = useRef<WsClient | null>(null);
 
-  const connect = () => {
+  const connect = (sessionId?: string) => {
     const client = new WsClient(
-      "/ws/stream",
       (msg) => setMessages((prev) => [...prev, msg.content]),
       setStatus
     );
     clientRef.current = client;
-    client.connect();
+    client.connect(sessionId);   // pass ?session_id= to resume a chat session
   };
 
   const sendPrompt = (text: string) => {
-    clientRef.current?.send(JSON.stringify({ prompt: text }));
+    clientRef.current?.send(text);
   };
+
+  const disconnect = () => clientRef.current?.disconnect();
 
   // ...render connect button, messages, input
 }
 ```
+
+The `WsClient` auto-reconnects with backoff (1s → 30s max) after an
+unexpected close; call `disconnect()` on unmount to stop it.
 
 ### WebSocket Message Envelope
 
@@ -470,20 +487,36 @@ export default function StreamPage() {
 { "type": "message", "content": "user input" }
 
 // Backend responds:
-{ "type": "message"|"token"|"connected"|"done"|"error",
-  "content": "...",
-  "sender": "user"|"bot"|"system",
+{ "type": "connected", "session_id": "..." }   // first frame, before any echo
+{ "type": "message",
+  "content": "Echo: user input",
+  "sender": "assistant",
   "timestamp": "2026-07-25T12:00:00Z" }
+{ "type": "error", "message": "content exceeds 10000 chars" }
 ```
 
 ---
 
 ## 7. AI API Integration Guide
 
-### Pattern 1: Direct API Call (Request-Response)
+The project uses the **DeepSeek API**. Configuration lives in
+`backend/app/core/config.py` (`deepseek_api_key`, `deepseek_models`,
+`deepseek_default_model`). A complete, production-shaped reference is the
+[Task Decomposer](backend/app/tools/modules/task_decomposer.py) tool: prompt
+building and the API call live in a self-contained client module
+(`task_decomposer_client.py`), failures are wrapped as `ProviderError`, and
+the response is validated with Pydantic.
+
+### Pattern: Direct API Call (Request-Response)
 
 ```python
 import httpx
+
+from app.core.config import settings
+from app.core.errors import ProviderError, ValidationError
+
+DEEPSEEK_URL = "https://api.deepseek.com/chat/completions"
+
 
 class SummarizerTool(BaseTool):
     tool_id = "summarizer"
@@ -491,47 +524,62 @@ class SummarizerTool(BaseTool):
     description = "Summarize text using AI"
     mode = "request-response"
 
-    async def handle_invoke(self, payload: dict) -> dict:
+    async def handle_invoke(self, payload: dict, db: AsyncSession) -> dict:
         text = payload.get("text", "")
+        if not text:
+            raise ValidationError("text is required", code="EMPTY_TEXT")
 
-        async with httpx.AsyncClient(timeout=60) as client:
-            response = await client.post(
-                "https://api.openai.com/v1/chat/completions",
-                headers={
-                    "Authorization": f"Bearer {settings.openai_api_key}",
-                    "Content-Type": "application/json",
-                },
-                json={
-                    "model": "gpt-4o",
-                    "messages": [
-                        {"role": "system", "content": "Summarize the following text."},
-                        {"role": "user", "content": text},
-                    ],
-                },
+        body = {
+            "model": payload.get("model") or settings.deepseek_default_model,
+            "messages": [
+                {"role": "system", "content": "Summarize the following text."},
+                {"role": "user", "content": text},
+            ],
+            "response_format": {"type": "json_object"},
+            "temperature": 0.2,
+            "max_tokens": 2200,
+        }
+        headers = {
+            "Authorization": f"Bearer {settings.deepseek_api_key}",
+            "Content-Type": "application/json",
+        }
+
+        try:
+            async with httpx.AsyncClient(timeout=60) as client:
+                response = await client.post(DEEPSEEK_URL, headers=headers, json=body)
+        except httpx.HTTPError as exc:
+            raise ProviderError("无法连接 DeepSeek API", code="DEEPSEEK_ERROR") from exc
+
+        if response.status_code >= 400:
+            raise ProviderError(
+                f"DeepSeek API 返回错误：HTTP {response.status_code}",
+                code="DEEPSEEK_ERROR",
             )
 
-        if response.status_code != 200:
-            return {
-                "success": False,
-                "error": {"code": "API_ERROR", "message": response.text},
-            }
+        try:
+            payload = response.json()
+            summary = payload["choices"][0]["message"]["content"]
+        except (KeyError, IndexError, TypeError, ValueError) as exc:
+            raise ProviderError("DeepSeek 返回结构异常", code="DEEPSEEK_ERROR") from exc
 
-        data = response.json()
-        summary = data["choices"][0]["message"]["content"]
-
-        return {
-            "success": True,
-            "data": {
-                "summary": summary,
-                "model": "gpt-4o",
-                "usage": data.get("usage"),
-            },
-        }
+        return {"summary": summary, "model": body["model"]}
 ```
 
-### Pattern 2: Streaming via WebSocket
+Key rules:
 
-For streaming AI responses (e.g., ChatGPT-style), use WebSocket to push tokens progressively:
+- **Never return an error dict** — raise `ProviderError` (or `ValidationError`
+  for bad input). The router converts it into the standard envelope.
+- **Never let exceptions escape raw** — wrap network / HTTP / parse failures
+  in `ProviderError` so the client gets a typed, structured error.
+- **Validate the model response** with a Pydantic schema before using it
+  (see `ModelTaskAnalysis` in `task_decomposer_client.py`).
+
+### Pattern: Streaming via WebSocket
+
+For streaming AI responses (ChatGPT-style), use WebSocket to push tokens
+progressively. The existing `ws/handler.py` shows the session/persistence
+pattern; a streaming tool would send `{"type": "token", "content": ...}`
+frames from an `httpx.AsyncClient.stream` loop and finish with a `done` frame:
 
 ```python
 import json
@@ -539,14 +587,14 @@ import httpx
 from fastapi import WebSocket
 
 
-async def stream_ai_response(websocket: WebSocket, prompt: str):
+async def stream_ai_response(websocket: WebSocket, prompt: str, api_key: str):
     async with httpx.AsyncClient(timeout=120) as client:
         async with client.stream(
             "POST",
-            "https://api.openai.com/v1/chat/completions",
-            headers={"Authorization": f"Bearer {settings.openai_api_key}"},
+            "https://api.deepseek.com/chat/completions",
+            headers={"Authorization": f"Bearer {api_key}"},
             json={
-                "model": "gpt-4o",
+                "model": "deepseek-v4-flash",
                 "messages": [{"role": "user", "content": prompt}],
                 "stream": True,
             },
@@ -566,23 +614,19 @@ async def stream_ai_response(websocket: WebSocket, prompt: str):
 
 ### Environment Variables for AI APIs
 
-Add API keys to `backend/.env` (never commit to git):
+Add the API key to `backend/.env` (never commit to git) — or the repo root
+`.env` used by Docker Compose:
 
 ```ini
 # backend/.env
-OPENAI_API_KEY=sk-...
-ANTHROPIC_API_KEY=sk-ant-...
-TOGETHER_API_KEY=...
+DEEPSEEK_API_KEY=sk-...
+DEEPSEEK_MODELS=deepseek-v4-flash,deepseek-v4-pro
+DEEPSEEK_DEFAULT_MODEL=deepseek-v4-flash
 ```
 
-Add corresponding fields to `backend/app/core/config.py`:
-
-```python
-class Settings(BaseSettings):
-    # ...
-    openai_api_key: str = ""
-    anthropic_api_key: str = ""
-```
+These fields already exist in `Settings` (`backend/app/core/config.py`). The
+frontend reads the model list from `GET /api/config`, so a new model added
+here is picked up without a frontend rebuild.
 
 ### Using the Cache Layer
 
@@ -651,23 +695,32 @@ alembic upgrade head
 
 ### Recording Tool Calls
 
-Use `ToolCallRecord` to log every invocation:
+Every tool invocation is audited **automatically** by the API layer
+(`app/api/routes/tools.py` → `app/services/audit.py::log_tool_call`): the
+input payload, output data, and success flag are written to
+`tool_call_records` on every call — success or failure. You can view the log
+via `GET /api/audit/tool-calls`. Tools never write audit records themselves.
+
+For tool-specific data (your own tables), use the **injected** `db` session
+and **never commit** inside the tool:
 
 ```python
-from app.db.session import async_session_factory
-from app.models import ToolCallRecord
-
-# In your tool's handle_invoke:
-async with async_session_factory() as db:
-    record = ToolCallRecord(
-        tool_id=self.tool_id,
-        input_data=json.dumps(payload),
-        output_data=json.dumps(result),
-        success=result.get("success", False),
-    )
-    db.add(record)
-    await db.commit()
+# In your tool's handle_invoke — db is injected, no session factory needed:
+record = TranslationRecord(
+    source_text=text,
+    translated_text=translated,
+    source_lang=source_lang,
+    target_lang=target_lang,
+)
+db.add(record)
+# No await db.commit() here! The router commits exactly once per request.
 ```
+
+This is the unit-of-work rule: services and tools `add`/`flush`, the router
+`commit`s once, and any expected failure (typed error) triggers a single
+`rollback`. If your tool must swallow a failure and keep going (e.g. a
+best-effort history save), do `await db.rollback()` explicitly first — see
+`_analyze_task` in `task_decomposer.py`.
 
 ---
 
@@ -698,9 +751,9 @@ Use CSS classes from `index.css`. Available utility classes:
 
 ```typescript
 // types/index.ts
-interface ToolMeta { tool_id, name, description, mode }
+interface ToolMeta { tool_id, name, description, mode, config? }
 interface ApiResponse<T> { success, data?, error? }
-interface WsMessage { type, content, sender, timestamp }
+interface WsMessage { type, content, sender, timestamp, session_id? }
 ```
 
 ---
@@ -711,8 +764,9 @@ interface WsMessage { type, content, sender, timestamp }
 
 - **One file per tool module** in `backend/app/tools/modules/`
 - **tool_id** uses `snake_case` (e.g., `image_generator`, `code_reviewer`)
-- **Keep `handle_invoke` focused**: validate input, call AI/external API, return structured result
-- **Error handling**: always return `{"success": False, "error": {"code": "...", "message": "..."}}` instead of raising exceptions
+- **Keep `handle_invoke` focused**: validate input, call AI/external API, return the data payload
+- **Error handling**: raise typed errors (`ValidationError`, `NotFoundError`, `ProviderError`) instead of returning failure dicts; never let raw exceptions escape
+- **DB access**: use the injected `db: AsyncSession`; never open your own session and never `commit` inside a tool (unit-of-work — the router commits once)
 - **Async IO**: use `httpx.AsyncClient` for HTTP calls, not `requests`
 - **Secrets**: never hardcode API keys; use `Settings` from `config.py`
 
@@ -780,9 +834,9 @@ When starting work on this project, read in this order:
 
 ```text
 1. CLAUDE.md               — Workflow protocol instructions
-2. AGENTS.md                — Codex-specific entry
-3. .agent-workspace/        — WIP workflows
-4. docs/development.md      — Setup guide
+2. AGENTS.md               — Cross-agent workflow bootstrap
+3. .workflow/              — Prompt-driven workflow system
+4. docs/development.md     — Setup guide
 5. docs/ai-tool-development-handbook.md  — This file
 ```
 
@@ -811,7 +865,7 @@ When asked to add a new AI tool:
 - Each tool is self-contained: one backend module + one frontend page
 - Use existing examples as templates (`BlankToolPage` for request-response, `ChatToolPage` for real-time)
 - API keys and environment-specific config go in `backend/app/core/config.py` using `pydantic-settings`
-- Database operations use async sessions from `app.db.session.async_session_factory`
+- Database operations use the **injected** async session (`db: AsyncSession` parameter of `handle_invoke`) — never `app.db.session.async_session_factory` inside a tool, and never commit there
 - Cache operations use `app.services.cache.cache_get/cache_set`
 
 ---

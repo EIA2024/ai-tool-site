@@ -1,4 +1,5 @@
 # AI Tool Site — Backend (Dev requirements)
+# Installs the package plus its dev extras (pytest, ruff, aiosqlite, …).
 
--e .
+-e .[dev]
 uvicorn[standard]
