@@ -48,7 +48,17 @@ class TaskAnalysis(ModelTaskAnalysis):
 
 
 class DeepSeekClientError(RuntimeError):
-    pass
+    """DeepSeek integration failure.
+
+    ``retryable`` marks failures where a fresh attempt has a real chance of
+    succeeding (transient transport errors, 5xx, non-deterministic model
+    JSON). 4xx auth/quota errors are never retryable — a retry cannot fix
+    them and would only burn quota or lock the account.
+    """
+
+    def __init__(self, message: str, *, retryable: bool = False):
+        super().__init__(message)
+        self.retryable = retryable
 
 
 # ── Prompt building ──
@@ -164,7 +174,12 @@ def _resolve_api_key(input_data: AnalyzeTaskInput) -> str:
     raise DeepSeekClientError("未配置 DeepSeek API Key。请在 .env 中设置，或在页面输入临时 Key。")
 
 
-async def analyze_with_deepseek(input_data: AnalyzeTaskInput) -> TaskAnalysis:
+async def _call_deepseek_once(input_data: AnalyzeTaskInput) -> ModelTaskAnalysis:
+    """Run a single completion and parse the model's JSON into the schema.
+
+    Raises ``DeepSeekClientError`` with a diagnostic message; returns the
+    parsed analysis on success.
+    """
     api_key = _resolve_api_key(input_data)
 
     body = {
@@ -187,32 +202,57 @@ async def analyze_with_deepseek(input_data: AnalyzeTaskInput) -> TaskAnalysis:
         async with httpx.AsyncClient(timeout=60) as client:
             response = await client.post(DEEPSEEK_URL, headers=headers, json=body)
     except httpx.HTTPError as exc:
-        raise DeepSeekClientError("无法连接 DeepSeek API") from exc
+        raise DeepSeekClientError("无法连接 DeepSeek API", retryable=True) from exc
 
     if response.status_code >= 400:
         # Include the upstream detail (truncated) so operators can diagnose
         # auth/quota errors without a network trace.
         detail = (response.text or "").strip()[:300]
         suffix = f": {detail}" if detail else ""
+        # 5xx/rate-limit are transient and worth a retry; 4xx (auth, quota,
+        # unknown model) will fail identically on a retry.
         raise DeepSeekClientError(
-            f"DeepSeek API 返回错误：HTTP {response.status_code}{suffix}"
+            f"DeepSeek API 返回错误：HTTP {response.status_code}{suffix}",
+            retryable=response.status_code >= 500,
         )
 
     try:
         payload = response.json()
         content = payload["choices"][0]["message"]["content"]
     except (KeyError, IndexError, TypeError, json.JSONDecodeError) as exc:
-        raise DeepSeekClientError("DeepSeek 返回结构异常") from exc
+        raise DeepSeekClientError("DeepSeek 返回结构异常", retryable=True) from exc
 
     if not content or not content.strip():
-        raise DeepSeekClientError("DeepSeek 返回空内容，请调整 prompt 后重试")
+        raise DeepSeekClientError(
+            "DeepSeek 返回空内容，请调整 prompt 后重试", retryable=True
+        )
 
     try:
-        model_analysis = ModelTaskAnalysis.model_validate(json.loads(content))
+        return ModelTaskAnalysis.model_validate(json.loads(content))
     except (json.JSONDecodeError, ValueError) as exc:
-        raise DeepSeekClientError("DeepSeek 返回的 JSON 未通过 schema 校验") from exc
+        raise DeepSeekClientError(
+            "DeepSeek 返回的 JSON 未通过 schema 校验", retryable=True
+        ) from exc
 
-    return TaskAnalysis(
-        **model_analysis.model_dump(),
-        agent_prompt=build_agent_prompt(model_analysis),
-    )
+
+async def analyze_with_deepseek(input_data: AnalyzeTaskInput) -> TaskAnalysis:
+    # LLM JSON output is non-deterministic: one call in a few returns
+    # truncated or schema-invalid JSON even with response_format. Retry
+    # retryable failures (parse errors, transient transport/5xx) with a
+    # fresh completion rather than failing the user on a bad roll. 4xx
+    # auth/quota errors are never retried.
+    last_error: DeepSeekClientError | None = None
+    for _attempt in range(3):
+        try:
+            model_analysis = await _call_deepseek_once(input_data)
+        except DeepSeekClientError as exc:
+            if not exc.retryable:
+                raise
+            last_error = exc
+            continue
+        return TaskAnalysis(
+            **model_analysis.model_dump(),
+            agent_prompt=build_agent_prompt(model_analysis),
+        )
+    # Only reachable when every attempt failed retryably.
+    raise last_error or DeepSeekClientError("DeepSeek 调用多次失败")
