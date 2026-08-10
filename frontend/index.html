@@ -10,6 +10,9 @@
       dangerouslySetInnerHTML is used anywhere in this app, and all user
       content is escaped by React, so 'unsafe-inline' scripts here mostly
       guards against future regressions.
+      The strictCsp vite plugin strips 'unsafe-inline'/'unsafe-eval' from the
+      built output (production serves external scripts only), so the CSP below
+      is the *dev* policy — the shipped one is stricter.
     -->
     <meta
       http-equiv="Content-Security-Policy"
