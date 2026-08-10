@@ -1,6 +1,6 @@
 """Tool-call audit log (unit-of-work: no commits here)."""
 
-from sqlalchemy import case, func, select
+from sqlalchemy import case, delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import ToolCallRecord
@@ -74,3 +74,28 @@ async def summarize_tool_calls(db: AsyncSession) -> list[dict]:
         }
         for tool_id, calls, failures in result.all()
     ]
+
+
+async def prune_tool_calls(db: AsyncSession, max_count: int) -> int:
+    """Delete the oldest audit rows once the table exceeds ``max_count``.
+
+    Bounds the audit table for long-lived deployments (mirrors
+    ``prune_session_messages``). Returns how many rows were deleted (0 when
+    under the cap or the cap is disabled). Call after logging, before commit.
+    """
+    if max_count <= 0:
+        return 0
+    count = await db.scalar(select(func.count()).select_from(ToolCallRecord))
+    if count <= max_count:
+        return 0
+    excess = count - max_count
+    result = await db.execute(
+        select(ToolCallRecord.id)
+        .order_by(ToolCallRecord.created_at.asc())
+        .limit(excess)
+    )
+    ids = [row for (row,) in result.all()]
+    if not ids:
+        return 0
+    await db.execute(delete(ToolCallRecord).where(ToolCallRecord.id.in_(ids)))
+    return len(ids)

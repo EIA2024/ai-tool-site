@@ -24,9 +24,16 @@ _SENSITIVE_KEY_PARTS = (
     "credential",
 )
 
+# ``*_key`` is a broad credential signal (openai_key, deepseek_key, ...), so
+# it over-matches a few harmless identifier fields. Those are listed here and
+# exempted so the audit log keeps useful, non-secret context visible.
+_NON_SENSITIVE_KEY_NAMES = ("stage_key",)
+
 
 def _is_sensitive_key(key: str) -> bool:
     lowered = str(key).lower()
+    if lowered in _NON_SENSITIVE_KEY_NAMES:
+        return False
     if lowered == "key" or lowered.endswith("_key"):
         return True
     return any(part in lowered for part in _SENSITIVE_KEY_PARTS)
@@ -36,8 +43,10 @@ def redact(value: Any) -> Any:
     """Recursively replace values stored under sensitive keys with a placeholder.
 
     Plain strings and numbers are returned untouched; dicts and lists are
-    walked depth-first. ``stage_key`` is redacted too (harmless — it is only
-    a stage identifier), keeping the rule simple and predictable.
+    walked depth-first. Any key that looks like a credential — ``*_key``,
+    ``*token*``, ``*password*``, ``*secret*``, ``*authorization*``,
+    ``*credential*`` — has its value replaced, except the explicit allowlist
+    (``stage_key``) which is a stage identifier, not a secret.
     """
     if isinstance(value, dict):
         return {

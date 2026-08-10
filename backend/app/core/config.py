@@ -40,6 +40,11 @@ class Settings(BaseSettings):
     # already bounded separately). Set to 0 to disable pruning.
     chat_max_messages_per_session: int = 500
 
+    # Audit-log retention: prune the oldest tool-call records once the table
+    # exceeds this count, so a long-lived deployment can't grow the audit log
+    # without bound. Set to 0 to keep every record (not recommended).
+    audit_max_records: int = 50_000
+
     # Security / rate limiting
     rate_limit_enabled: bool = True
     rate_limit_per_minute: int = 20

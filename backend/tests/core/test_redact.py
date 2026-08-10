@@ -40,7 +40,24 @@ def test_legit_field_names_preserved():
     assert out["model"] == "deepseek-v4-flash"
 
 
-def test_stage_key_redacted_too():
-    # Conservative by design: any *_key field is redacted, even a harmless
-    # stage identifier — better to over-redact than leak a credential.
-    assert redact({"stage_key": "01-goal"}) == {"stage_key": "[REDACTED]"}
+def test_stage_key_preserved():
+    # stage_key is a stage identifier, not a credential — it is explicitly
+    # allowlisted so the audit log keeps useful context visible.
+    assert redact({"stage_key": "01-goal"}) == {"stage_key": "01-goal"}
+
+
+def test_provider_api_keys_still_redacted():
+    # The *_key rule must keep catching provider-style keys not covered by
+    # the explicit parts list, so credentials never leak.
+    out = redact(
+        {
+            "openai_key": "sk-aaa",
+            "deepseek_key": "sk-bbb",
+            "session_api_key": "sk-ccc",
+            "stage_key": "02-research",
+        }
+    )
+    assert out["openai_key"] == "[REDACTED]"
+    assert out["deepseek_key"] == "[REDACTED]"
+    assert out["session_api_key"] == "[REDACTED]"
+    assert out["stage_key"] == "02-research"

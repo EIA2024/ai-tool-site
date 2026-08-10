@@ -8,7 +8,6 @@ from app.api.routes import router as api_router
 from app.core.config import settings
 from app.core.errors import AppError, InternalError
 from app.services.cache import close_redis
-from app.sse.handler import router as sse_router
 from app.ws.handler import router as ws_router
 
 
@@ -95,7 +94,6 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
 # ── Routers ───────────────────────────────────────────────────────────
 app.include_router(api_router, prefix="/api")
 app.include_router(ws_router, prefix="/ws")
-app.include_router(sse_router, prefix="/sse")
 
 
 @app.get("/api/health")

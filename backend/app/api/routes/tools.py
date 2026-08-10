@@ -20,7 +20,7 @@ from app.core.errors import AppError, NotFoundError, RateLimitError, ok
 from app.core.ratelimit import is_allowed
 from app.core.redact import redact
 from app.db.session import get_db
-from app.services.audit import log_tool_call
+from app.services.audit import log_tool_call, prune_tool_calls
 from app.tools.registry import tool_registry
 
 logger = logging.getLogger(__name__)
@@ -107,6 +107,7 @@ async def invoke_tool(
     finally:
         try:
             await log_tool_call(db, tool_id, input_json, output_json, success)
+            await prune_tool_calls(db, settings.audit_max_records)
             await db.commit()
         except Exception:
             logger.warning(

@@ -172,6 +172,27 @@ async def test_ws_resumes_existing_session(db, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_ws_invalid_session_id_starts_fresh(db, monkeypatch):
+    """A bogus session_id (ids are String columns, so lookup is a no-op) must
+    not crash the socket — it silently falls back to a brand-new session."""
+    monkeypatch.setattr("app.ws.handler.chat_completion", _stub_completion)
+
+    ws = FakeWebSocket(
+        [_user_message("hello")], query_params={"session_id": "not-a-real-session"}
+    )
+    await chat_websocket(ws, db)
+
+    sid = ws.sent[0]["session_id"]
+    assert sid != "not-a-real-session"
+    assert ws.closed is None
+    result = await db.execute(
+        select(ChatMessage).order_by(ChatMessage.created_at)
+    )
+    rows = result.scalars().all()
+    assert len(rows) == 2  # user + assistant persisted under the new session
+
+
+@pytest.mark.asyncio
 async def test_ws_autotitles_session_from_first_message(db, monkeypatch):
     """The session title is derived from the first user message."""
     from app.services.chat_history import get_session

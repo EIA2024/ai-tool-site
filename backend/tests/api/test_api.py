@@ -223,6 +223,22 @@ async def test_audit_log_redacts_secrets(api_client):
 
 
 @pytest.mark.asyncio
+async def test_invoke_prunes_audit_under_small_cap(api_client, monkeypatch):
+    """The invoke path keeps the audit table under AUDIT_MAX_RECORDS."""
+    monkeypatch.setattr(settings, "audit_max_records", 3)
+    for i in range(5):
+        res = await api_client.post(
+            "/api/tools/blank_tool/invoke",
+            json={"payload": {"input": f"call {i}"}},
+        )
+        assert res.status_code == 200
+
+    res = await api_client.get("/api/audit/tool-calls")
+    assert res.json()["success"] is True
+    assert res.json()["data"]["total"] == 3
+
+
+@pytest.mark.asyncio
 async def test_invoke_coerces_non_string_input(api_client):
     res = await api_client.post(
         "/api/tools/blank_tool/invoke", json={"payload": {"input": 123}}
