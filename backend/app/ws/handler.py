@@ -192,11 +192,12 @@ async def chat_websocket(
             # text — that full text is what gets persisted and what history
             # reload returns, so streamed and restored chats look identical.
             chunks: list[str] = []
+            reply = ""
+            stream = chat_completion_stream(
+                [{"role": "system", "content": _SYSTEM_PROMPT}] + context,
+                settings.deepseek_default_model,
+            )
             try:
-                stream = chat_completion_stream(
-                    [{"role": "system", "content": _SYSTEM_PROMPT}] + context,
-                    settings.deepseek_default_model,
-                )
                 async for delta in stream:
                     chunks.append(delta)
                     await websocket.send_text(
@@ -208,6 +209,11 @@ async def chat_websocket(
                 # (Also covers the retryable empty-stream error above.)
                 reply = f"（AI 调用失败：{exc}）"
                 logger.warning("Chat AI failure for session %s: %s", session.id, exc)
+            finally:
+                # Release the transport even if the client dropped mid-stream
+                # (a send failing mid-generator would otherwise leave the
+                # httpx connection open until GC).
+                await stream.aclose()
 
             if not reply.strip():
                 # Defense in depth: an empty reply (e.g. a caller that yielded

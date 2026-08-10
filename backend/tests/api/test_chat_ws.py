@@ -159,6 +159,35 @@ async def test_ws_empty_stream_degrades_gracefully(db, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_ws_stream_closes_generator_on_client_drop(db, monkeypatch):
+    """If the client vanishes mid-stream, the handler explicitly closes the
+    generator so its transport is released instead of lingering until GC."""
+    closed = {"n": 0}
+
+    async def _stub(messages, model, **kwargs):
+        try:
+            yield "第一段"
+            yield "第二段"
+        finally:
+            closed["n"] += 1
+
+    class _DropWebSocket(FakeWebSocket):
+        """Dies on the second chunk — simulates a client gone mid-stream."""
+
+        async def send_text(self, text):
+            payload = json.loads(text)
+            if payload.get("type") == "chunk" and self.sent:
+                raise ConnectionResetError("client gone")
+            self.sent.append(payload)
+
+    monkeypatch.setattr("app.ws.handler.chat_completion_stream", _stub)
+    ws = _DropWebSocket([_user_message("hi")])
+    await chat_websocket(ws, db)
+
+    assert closed["n"] == 1  # generator closed by the handler's finally
+
+
+@pytest.mark.asyncio
 async def test_ws_persists_user_and_assistant(db, monkeypatch):
     """Both roles land in the DB for history reload."""
     monkeypatch.setattr("app.ws.handler.chat_completion_stream", _stub_completion)
