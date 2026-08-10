@@ -40,6 +40,14 @@ class Settings(BaseSettings):
     # already bounded separately). Set to 0 to disable pruning.
     chat_max_messages_per_session: int = 500
 
+    # Chat model budget. V4 reasoning models default to high-effort thinking,
+    # which can exhaust max_tokens on reasoning alone and end the reply empty
+    # (finish_reason="length"). Chat asks for "low" effort and a generous
+    # budget so long requests still get an actual answer. Set
+    # CHAT_REASONING_EFFORT to an empty string to omit the field entirely.
+    chat_max_tokens: int = 8192
+    chat_reasoning_effort: str = "low"
+
     # Audit-log retention: prune the oldest tool-call records once the table
     # exceeds this count, so a long-lived deployment can't grow the audit log
     # without bound. Set to 0 to keep every record (not recommended).

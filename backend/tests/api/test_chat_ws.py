@@ -223,6 +223,47 @@ async def test_ws_empty_stream_degrades_gracefully(db, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_ws_passes_chat_budget_and_low_effort(db, monkeypatch):
+    """The chat model call requests the configured token budget and a capped
+    reasoning effort — V4 over-thinking otherwise truncates long answers
+    (the reported "1000 个随机数" empty-reply bug)."""
+    captured = {}
+
+    async def _stub(messages, model, **kwargs):
+        captured.update(kwargs)
+        yield "ok"
+
+    monkeypatch.setattr("app.ws.handler.chat_completion_stream", _stub)
+    ws = FakeWebSocket([_user_message("hi")])
+    await chat_websocket(ws, db)
+
+    assert captured["max_tokens"] == settings.chat_max_tokens
+    assert captured["reasoning_effort"] == settings.chat_reasoning_effort
+
+
+@pytest.mark.asyncio
+async def test_ws_reasoning_truncation_surfaces_honest_message(db, monkeypatch):
+    """A reasoning-truncated reply (budget exhausted while the model thinks)
+    reaches the user as an honest message rather than a bare failure."""
+    async def _truncated(messages, model, **kwargs):
+        raise DeepSeekError(
+            "DeepSeek 模型思考过久，答案生成前已用尽 token 预算。请缩小请求范围后重试。",
+            retryable=True,
+        )
+        yield  # unreachable — makes this an async generator
+
+    monkeypatch.setattr("app.ws.handler.chat_completion_stream", _truncated)
+    ws = FakeWebSocket([_user_message("给我1000个随机数")])
+    await chat_websocket(ws, db)
+
+    assert ws.closed is None
+    reply = ws.sent[-1]
+    assert reply["type"] == "message"
+    assert "思考过久" in reply["content"]
+    assert "token" in reply["content"]
+
+
+@pytest.mark.asyncio
 async def test_ws_stream_closes_generator_on_client_drop(db, monkeypatch):
     """If the client vanishes mid-stream, the handler explicitly closes the
     generator so its transport is released instead of lingering until GC."""

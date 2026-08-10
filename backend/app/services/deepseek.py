@@ -52,8 +52,13 @@ async def chat_completion(
     temperature: float = 0.2,
     response_format: dict[str, str] | None = None,
     timeout: float = 90.0,
+    reasoning_effort: str | None = None,
 ) -> str:
     """Run one DeepSeek completion and return the assistant's content string.
+
+    ``reasoning_effort`` (``"low"``/``"high"``/``"max"``) caps how much the
+    model "thinks" before answering on V4 reasoning models; callers wanting a
+    fast answer (chat) pass ``"low"``. Pass ``None`` to let the API default.
 
     Raises ``DeepSeekError``; check ``retryable`` for the retry policy.
     """
@@ -67,6 +72,8 @@ async def chat_completion(
     }
     if response_format:
         body["response_format"] = response_format
+    if reasoning_effort:
+        body["reasoning_effort"] = reasoning_effort
     headers = {
         "Authorization": f"Bearer {key}",
         "Content-Type": "application/json",
@@ -110,6 +117,7 @@ async def chat_completion_stream(
     temperature: float = 0.2,
     response_format: dict[str, str] | None = None,
     timeout: float = 90.0,
+    reasoning_effort: str | None = None,
 ):
     """Run one DeepSeek completion with ``stream: True`` and yield content
     deltas as they arrive (async generator).
@@ -117,6 +125,12 @@ async def chat_completion_stream(
     Same error taxonomy as :func:`chat_completion` (raise ``DeepSeekError``,
     check ``retryable``). The caller accumulates the yielded deltas into the
     full reply — nothing is buffered here.
+
+    ``reasoning_effort`` is passed through to the API. V4 reasoning models
+    "think" by default at ``high`` effort and the thinking counts toward
+    ``max_tokens``; a request that over-thinks can end with ``finish_reason``
+    ``"length"`` and zero ``content`` deltas. That case is reported distinctly
+    (the model ran out of budget thinking, not "returned nothing").
     """
     key = api_key or resolve_api_key()
     body: dict = {
@@ -128,6 +142,8 @@ async def chat_completion_stream(
     }
     if response_format:
         body["response_format"] = response_format
+    if reasoning_effort:
+        body["reasoning_effort"] = reasoning_effort
     headers = {
         "Authorization": f"Bearer {key}",
         "Content-Type": "application/json",
@@ -148,6 +164,7 @@ async def chat_completion_stream(
                         retryable=response.status_code >= 500,
                     )
                 yielded_any = False
+                finish_reason = None
                 async for line in response.aiter_lines():
                     if not line.startswith("data:"):
                         continue
@@ -155,9 +172,15 @@ async def chat_completion_stream(
                     if payload == "[DONE]":
                         break
                     try:
-                        delta = json.loads(payload)["choices"][0]["delta"]
+                        choice = json.loads(payload)["choices"][0]
                     except (KeyError, IndexError, TypeError, ValueError):
                         continue
+                    # A final chunk may carry finish_reason with an empty delta;
+                    # read both independently so a reasoning-truncated stream is
+                    # diagnosed instead of silently skipped.
+                    if choice.get("finish_reason"):
+                        finish_reason = choice["finish_reason"]
+                    delta = choice.get("delta") or {}
                     content = delta.get("content")
                     if content:
                         yielded_any = True
@@ -165,6 +188,17 @@ async def chat_completion_stream(
         except httpx.HTTPError as exc:
             raise DeepSeekError("无法连接 DeepSeek API", retryable=True) from exc
         if not yielded_any:
+            if finish_reason == "length":
+                # Reasoning models spend the max_tokens budget on "thinking"
+                # first; a request that over-thinks never reaches the answer
+                # and ends with zero content. Distinct from a model that
+                # genuinely returned nothing, so the user knows to shrink the
+                # request rather than just "adjust the prompt".
+                raise DeepSeekError(
+                    "DeepSeek 模型思考过久，答案生成前已用尽 token 预算。"
+                    "请缩小请求范围后重试。",
+                    retryable=True,
+                )
             # Same empty-reply semantics as chat_completion: a stream that
             # produced no content is a retryable model-output failure.
             raise DeepSeekError(
