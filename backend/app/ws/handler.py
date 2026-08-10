@@ -9,7 +9,8 @@ Design (first principles):
   same conversation continues in the same DB row.
 - Real AI replies: each user message is answered by DeepSeek, with the last
   ``_CONTEXT_LIMIT`` stored messages as conversation memory. The user sees a
-  ``typing`` frame while the model works.
+  ``typing`` frame while the model works, then ``chunk`` frames carrying the
+  reply as it streams in, and finally a ``message`` frame with the full text.
 - Timestamps come from ``utcnow()`` (naive UTC), never the deprecated
   ``datetime.utcnow()``, and messages are stored with the ``assistant`` role
   (``bot`` was normalized away in migration 004).
@@ -36,7 +37,7 @@ from app.services.chat_history import (
     prune_session_messages,
     touch_session,
 )
-from app.services.deepseek import DeepSeekError, chat_completion
+from app.services.deepseek import DeepSeekError, chat_completion_stream
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -186,15 +187,32 @@ async def chat_websocket(
             # Tell the client we are working so it can show a typing state.
             await websocket.send_text(json.dumps({"type": "typing"}))
 
+            # Stream the reply: a chunk frame per delta so the client can
+            # render as the model types, then a message frame carrying the full
+            # text — that full text is what gets persisted and what history
+            # reload returns, so streamed and restored chats look identical.
+            chunks: list[str] = []
             try:
-                reply = await chat_completion(
+                stream = chat_completion_stream(
                     [{"role": "system", "content": _SYSTEM_PROMPT}] + context,
                     settings.deepseek_default_model,
                 )
+                async for delta in stream:
+                    chunks.append(delta)
+                    await websocket.send_text(
+                        json.dumps({"type": "chunk", "content": delta})
+                    )
+                reply = "".join(chunks)
             except DeepSeekError as exc:
                 # Keep the socket alive; surface a visible, honest message.
+                # (Also covers the retryable empty-stream error above.)
                 reply = f"（AI 调用失败：{exc}）"
                 logger.warning("Chat AI failure for session %s: %s", session.id, exc)
+
+            if not reply.strip():
+                # Defense in depth: an empty reply (e.g. a caller that yielded
+                # nothing) must not produce an empty assistant bubble.
+                reply = "（AI 调用失败：模型返回了空回复）"
 
             response = {
                 "type": "message",

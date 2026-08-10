@@ -28,6 +28,10 @@ export default function ChatToolPage() {
   // fetches from a previous session resolving after the user clicked another)
   // check it and drop themselves.
   const historyTokenRef = useRef(0);
+  // The in-flight streaming reply: the localId of the assistant bubble we are
+  // accumulating "chunk" frames into plus its text so far. Cleared when the
+  // final "message" frame lands, on disconnect, and on session switch.
+  const streamingRef = useRef<{ id: string; text: string } | null>(null);
 
   const refreshSessions = useCallback(async () => {
     try {
@@ -69,9 +73,10 @@ export default function ChatToolPage() {
 
   const handleStatus = useCallback((s: string) => {
     // A reply was in flight when the socket dropped — clear the typing dots
-    // or they'd spin forever until the next "message" frame.
+    // (or they'd spin forever) and drop the half-streamed reply reference.
     if (s === "disconnected" || s.startsWith("reconnecting")) {
       setTyping(false);
+      streamingRef.current = null;
     }
     setStatus(s);
   }, []);
@@ -83,8 +88,11 @@ export default function ChatToolPage() {
       }
       const client = new WsClient(
         (msg) => {
-          // The server confirms/creates the session on connect — record it.
-          if (msg.type === "connected" && msg.session_id) {
+          if (msg.type === "connected") {
+            // Fresh handshake — any half-streamed reply from the previous
+            // connection is done; start clean.
+            streamingRef.current = null;
+            if (!msg.session_id) return;
             const sid = msg.session_id;
             setActiveSessionId(sid);
             setSessions((prev) =>
@@ -107,6 +115,33 @@ export default function ChatToolPage() {
             setTyping(true);
             return;
           }
+          if (msg.type === "chunk") {
+            // Streamed deltas of the assistant reply. Append to the open
+            // streaming bubble, or open one on the first chunk.
+            setTyping(false);
+            const text = msg.content ?? "";
+            if (streamingRef.current) {
+              streamingRef.current.text += text;
+              const { id, text: full } = streamingRef.current;
+              setMessages((prev) =>
+                prev.map((m) => (m.localId === id ? { ...m, content: full } : m))
+              );
+            } else {
+              const id = `stream-${localCounter++}`;
+              streamingRef.current = { id, text };
+              setMessages((prev) => [
+                ...prev,
+                {
+                  type: "message",
+                  content: text,
+                  sender: "assistant",
+                  timestamp: new Date().toISOString(),
+                  localId: id,
+                },
+              ]);
+            }
+            return;
+          }
           // Error frames (empty content, too long, rate-limited) have no
           // sender/content — surface them as a clear system bubble rather
           // than a malformed "undefined:" one.
@@ -126,10 +161,22 @@ export default function ChatToolPage() {
           }
           if (msg.type === "message") {
             setTyping(false);
-            setMessages((prev) => [
-              ...prev,
-              { ...msg, localId: `ws-${localCounter++}` },
-            ]);
+            if (streamingRef.current) {
+              // Final "message" frame closes the streaming reply — replace
+              // the accumulated chunk text with the full reply the server
+              // persisted (history reload shows the exact same text).
+              const id = streamingRef.current.id;
+              streamingRef.current = null;
+              setMessages((prev) =>
+                prev.map((m) => (m.localId === id ? { ...m, content: msg.content ?? "" } : m))
+              );
+            } else {
+              // No preceding chunks (e.g. a failure-path reply) — append.
+              setMessages((prev) => [
+                ...prev,
+                { ...msg, localId: `ws-${localCounter++}` },
+              ]);
+            }
           }
         },
         handleStatus
@@ -144,6 +191,7 @@ export default function ChatToolPage() {
     setActiveSessionId(null);
     setMessages([]);
     setTyping(false);
+    streamingRef.current = null;
     connectTo(null);
     // The "connected" message carries the freshly-created session id.
   };
@@ -152,6 +200,7 @@ export default function ChatToolPage() {
     setActiveSessionId(sessionId);
     setMessages([]);
     setTyping(false);
+    streamingRef.current = null;
     await loadHistory(sessionId);
     connectTo(sessionId);
   };
@@ -170,6 +219,7 @@ export default function ChatToolPage() {
       setActiveSessionId(null);
       setMessages([]);
       setTyping(false);
+      streamingRef.current = null;
     }
     setSessions((prev) => prev.filter((s) => s.id !== sessionId));
   };

@@ -1,10 +1,11 @@
 """WebSocket chat handler tests.
 
-The handler now answers each user message with a real DeepSeek reply and a
-``typing`` frame while the model works. We drive ``chat_websocket`` directly
-with a fake WebSocket (model call stubbed) so everything runs in the pytest
-event loop against the in-memory ``db`` fixture — no ASGI portal, no
-cross-event-loop teardown flakiness.
+The handler answers each user message with a real DeepSeek reply, streaming it
+back as ``typing`` → ``chunk``* → ``message`` frames. We drive
+``chat_websocket`` directly with a fake WebSocket (model call stubbed to an
+async generator) so everything runs in the pytest event loop against the
+in-memory ``db`` fixture — no ASGI portal, no cross-event-loop teardown
+flakiness.
 """
 
 import json
@@ -65,25 +66,26 @@ def _disable_rate_limit(monkeypatch):
 
 
 async def _stub_completion(messages, model, **kwargs):
-    return "你好，我是 AI 助手"
+    yield "你好，我是 AI 助手"
 
 
 @pytest.mark.asyncio
 async def test_ws_ai_reply_flow(db, monkeypatch):
-    """connected → (typing → message) with the model context containing the user text."""
+    """connected → (typing → chunk → message) with the model context containing the user text."""
     captured = {}
 
     async def _stub(messages, model, **kwargs):
         captured["model"] = model
         captured["context"] = messages
-        return "你好，我是 AI 助手"
+        yield "你好，我是 "
+        yield "AI 助手"
 
-    monkeypatch.setattr("app.ws.handler.chat_completion", _stub)
+    monkeypatch.setattr("app.ws.handler.chat_completion_stream", _stub)
     ws = FakeWebSocket([_user_message("你好")])
     await chat_websocket(ws, db)
 
     types = [f["type"] for f in ws.sent]
-    assert types == ["connected", "typing", "message"]
+    assert types == ["connected", "typing", "chunk", "chunk", "message"]
     assert ws.sent[0].get("session_id")
 
     assert captured["context"][0]["role"] == "system"
@@ -91,7 +93,10 @@ async def test_ws_ai_reply_flow(db, monkeypatch):
         m["role"] == "user" and m["content"] == "你好" for m in captured["context"]
     )
 
-    reply = ws.sent[2]
+    # Each delta is its own chunk frame; the final message joins them.
+    assert ws.sent[2]["content"] == "你好，我是 "
+    assert ws.sent[3]["content"] == "AI 助手"
+    reply = ws.sent[4]
     assert reply["sender"] == "assistant"
     assert reply["content"] == "你好，我是 AI 助手"
 
@@ -103,9 +108,9 @@ async def test_ws_conversation_memory_in_context(db, monkeypatch):
 
     async def _stub(messages, model, **kwargs):
         seen.append(messages)
-        return "ok"
+        yield "ok"
 
-    monkeypatch.setattr("app.ws.handler.chat_completion", _stub)
+    monkeypatch.setattr("app.ws.handler.chat_completion_stream", _stub)
     ws = FakeWebSocket([_user_message("我叫小明"), _user_message("我叫什么？")])
     await chat_websocket(ws, db)
 
@@ -120,9 +125,12 @@ async def test_ws_conversation_memory_in_context(db, monkeypatch):
 async def test_ws_surfaces_ai_failure_and_keeps_socket(db, monkeypatch):
     """A DeepSeek failure sends an honest assistant message, socket stays alive."""
     async def _fail(messages, model, **kwargs):
+        # Raised on the first iteration of the async generator — the handler
+        # catches DeepSeekError and keeps the socket alive.
         raise DeepSeekError("无法连接 DeepSeek API", retryable=True)
+        yield  # unreachable — makes this an async generator
 
-    monkeypatch.setattr("app.ws.handler.chat_completion", _fail)
+    monkeypatch.setattr("app.ws.handler.chat_completion_stream", _fail)
     ws = FakeWebSocket([_user_message("hi")])
     await chat_websocket(ws, db)
 
@@ -133,9 +141,27 @@ async def test_ws_surfaces_ai_failure_and_keeps_socket(db, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_ws_empty_stream_degrades_gracefully(db, monkeypatch):
+    """A stream that yields nothing still produces a visible assistant message
+    (an empty bubble would be a silent failure), and the socket stays alive."""
+    async def _empty(messages, model, **kwargs):
+        if False:
+            yield  # async generator that never yields content
+
+    monkeypatch.setattr("app.ws.handler.chat_completion_stream", _empty)
+    ws = FakeWebSocket([_user_message("hi")])
+    await chat_websocket(ws, db)
+
+    assert ws.closed is None
+    reply = ws.sent[-1]
+    assert reply["type"] == "message"
+    assert "AI 调用失败" in reply["content"]
+
+
+@pytest.mark.asyncio
 async def test_ws_persists_user_and_assistant(db, monkeypatch):
     """Both roles land in the DB for history reload."""
-    monkeypatch.setattr("app.ws.handler.chat_completion", _stub_completion)
+    monkeypatch.setattr("app.ws.handler.chat_completion_stream", _stub_completion)
     ws = FakeWebSocket([_user_message("persist me")])
     await chat_websocket(ws, db)
 
@@ -153,7 +179,7 @@ async def test_ws_persists_user_and_assistant(db, monkeypatch):
 @pytest.mark.asyncio
 async def test_ws_resumes_existing_session(db, monkeypatch):
     """Reconnecting with session_id continues the same conversation."""
-    monkeypatch.setattr("app.ws.handler.chat_completion", _stub_completion)
+    monkeypatch.setattr("app.ws.handler.chat_completion_stream", _stub_completion)
 
     first = FakeWebSocket([_user_message("hello")])
     await chat_websocket(first, db)
@@ -175,7 +201,7 @@ async def test_ws_resumes_existing_session(db, monkeypatch):
 async def test_ws_invalid_session_id_starts_fresh(db, monkeypatch):
     """A bogus session_id (ids are String columns, so lookup is a no-op) must
     not crash the socket — it silently falls back to a brand-new session."""
-    monkeypatch.setattr("app.ws.handler.chat_completion", _stub_completion)
+    monkeypatch.setattr("app.ws.handler.chat_completion_stream", _stub_completion)
 
     ws = FakeWebSocket(
         [_user_message("hello")], query_params={"session_id": "not-a-real-session"}
@@ -197,7 +223,7 @@ async def test_ws_autotitles_session_from_first_message(db, monkeypatch):
     """The session title is derived from the first user message."""
     from app.services.chat_history import get_session
 
-    monkeypatch.setattr("app.ws.handler.chat_completion", _stub_completion)
+    monkeypatch.setattr("app.ws.handler.chat_completion_stream", _stub_completion)
     ws = FakeWebSocket([_user_message("  帮我写一个登录功能  ")])
     await chat_websocket(ws, db)
     sid = ws.sent[0]["session_id"]
@@ -249,12 +275,12 @@ async def test_ws_rate_limited_skips_model_and_keeps_socket(db, monkeypatch):
 
     async def _stub(messages, model, **kwargs):
         calls["n"] += 1
-        return "ok"
+        yield "ok"
 
     async def _deny_second_message(ip, *, bucket="invoke"):
         return calls["n"] < 1
 
-    monkeypatch.setattr("app.ws.handler.chat_completion", _stub)
+    monkeypatch.setattr("app.ws.handler.chat_completion_stream", _stub)
     monkeypatch.setattr("app.ws.handler.is_allowed", _deny_second_message)
 
     ws = FakeWebSocket([_user_message("first"), _user_message("second")])

@@ -6,6 +6,8 @@ JSON wrap :func:`chat_completion` with their own schema validation and retry
 on top.
 """
 
+import json
+
 import httpx
 
 from app.core.config import settings
@@ -97,3 +99,74 @@ async def chat_completion(
         raise DeepSeekError("DeepSeek 返回空内容，请调整 prompt 后重试", retryable=True)
 
     return content
+
+
+async def chat_completion_stream(
+    messages: list[dict[str, str]],
+    model: str,
+    *,
+    api_key: str = "",
+    max_tokens: int = 4096,
+    temperature: float = 0.2,
+    response_format: dict[str, str] | None = None,
+    timeout: float = 90.0,
+):
+    """Run one DeepSeek completion with ``stream: True`` and yield content
+    deltas as they arrive (async generator).
+
+    Same error taxonomy as :func:`chat_completion` (raise ``DeepSeekError``,
+    check ``retryable``). The caller accumulates the yielded deltas into the
+    full reply — nothing is buffered here.
+    """
+    key = api_key or resolve_api_key()
+    body: dict = {
+        "model": model,
+        "messages": messages,
+        "temperature": temperature,
+        "max_tokens": max_tokens,
+        "stream": True,
+    }
+    if response_format:
+        body["response_format"] = response_format
+    headers = {
+        "Authorization": f"Bearer {key}",
+        "Content-Type": "application/json",
+    }
+
+    async with httpx.AsyncClient(timeout=timeout) as client:
+        try:
+            async with client.stream(
+                "POST", DEEPSEEK_URL, headers=headers, json=body
+            ) as response:
+                if response.status_code >= 400:
+                    # Error bodies are small; reading them here is safe even in
+                    # streaming mode (we are aborting anyway).
+                    detail = (response.text or "").strip()[:300]
+                    suffix = f": {detail}" if detail else ""
+                    raise DeepSeekError(
+                        f"DeepSeek API 返回错误：HTTP {response.status_code}{suffix}",
+                        retryable=response.status_code >= 500,
+                    )
+                yielded_any = False
+                async for line in response.aiter_lines():
+                    if not line.startswith("data:"):
+                        continue
+                    payload = line[5:].strip()
+                    if payload == "[DONE]":
+                        break
+                    try:
+                        delta = json.loads(payload)["choices"][0]["delta"]
+                    except (KeyError, IndexError, TypeError, ValueError):
+                        continue
+                    content = delta.get("content")
+                    if content:
+                        yielded_any = True
+                        yield content
+        except httpx.HTTPError as exc:
+            raise DeepSeekError("无法连接 DeepSeek API", retryable=True) from exc
+        if not yielded_any:
+            # Same empty-reply semantics as chat_completion: a stream that
+            # produced no content is a retryable model-output failure.
+            raise DeepSeekError(
+                "DeepSeek 返回空内容，请调整 prompt 后重试", retryable=True
+            )
