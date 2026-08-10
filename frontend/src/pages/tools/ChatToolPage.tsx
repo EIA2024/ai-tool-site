@@ -32,6 +32,11 @@ export default function ChatToolPage() {
   // accumulating "chunk" frames into plus its text so far. Cleared when the
   // final "message" frame lands, on disconnect, and on session switch.
   const streamingRef = useRef<{ id: string; text: string } | null>(null);
+  // Scroll stick-to-bottom: auto-scroll as new messages/chunks arrive, but
+  // never yank the user away while they scroll up through history. Updated on
+  // every scroll; "near the bottom" (within 40px) means sticky.
+  const messagesRef = useRef<HTMLDivElement | null>(null);
+  const stickToBottomRef = useRef(true);
 
   const refreshSessions = useCallback(async () => {
     try {
@@ -51,6 +56,23 @@ export default function ChatToolPage() {
       clientRef.current = null;
     };
   }, [refreshSessions]);
+
+  // Follow the conversation: scroll to the latest message whenever bubbles or
+  // the typing indicator change — but only if the user is already near the
+  // bottom (stickToBottomRef), so reading history isn't interrupted.
+  useEffect(() => {
+    const el = messagesRef.current;
+    if (el && stickToBottomRef.current) {
+      el.scrollTop = el.scrollHeight;
+    }
+  }, [messages, typing]);
+
+  const handleMessagesScroll = () => {
+    const el = messagesRef.current;
+    if (!el) return;
+    stickToBottomRef.current =
+      el.scrollHeight - el.scrollTop - el.clientHeight < 40;
+  };
 
   const loadHistory = useCallback(async (sessionId: string) => {
     const token = ++historyTokenRef.current;
@@ -288,7 +310,11 @@ export default function ChatToolPage() {
         </aside>
 
         <div className="chat-main">
-          <div className="chat-messages">
+          <div
+            className="chat-messages"
+            ref={messagesRef}
+            onScroll={handleMessagesScroll}
+          >
             {messages.length === 0 && (
               <p className="status-text">
                 {status === "connected"
