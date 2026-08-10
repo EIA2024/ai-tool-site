@@ -8,16 +8,19 @@ from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import settings
 from app.core.errors import NotFoundError, ValidationError, ok
 from app.db.session import get_db
 from app.models import ChatMessage, ChatSession
 from app.services.chat_history import (
     add_message,
+    auto_title_on_first_message,
     create_session,
     delete_session,
     get_messages,
     get_recent_sessions,
     get_session,
+    prune_session_messages,
     touch_session,
 )
 
@@ -107,9 +110,15 @@ async def add_rest_message(
         raise ValidationError("content 必须非空且不超过 10000 字符")
     if role not in ("user", "assistant"):
         raise ValidationError("role 必须是 user 或 assistant")
-    if await get_session(db, session_id) is None:
+    session = await get_session(db, session_id)
+    if session is None:
         raise NotFoundError("Session not found")
+    if role == "user":
+        await auto_title_on_first_message(db, session, content)
     msg = await add_message(db, session_id, role, content)
+    await prune_session_messages(
+        db, session_id, settings.chat_max_messages_per_session
+    )
     await touch_session(db, session_id)
     await db.commit()
     return ok({"message": _message_to_dict(msg)})

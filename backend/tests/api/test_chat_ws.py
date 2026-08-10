@@ -50,6 +50,20 @@ def _user_message(content: str) -> dict:
     return {"type": "message", "content": content}
 
 
+@pytest.fixture(autouse=True)
+def _disable_rate_limit(monkeypatch):
+    """These tests exercise the handler, not the real limiter's shared state.
+
+    The real per-IP/global buckets key on the client address, which every
+    FakeWebSocket reports as "unknown" — so without disabling, tests would
+    trip each other's limits. The rate-limit test below overrides
+    ``is_allowed`` itself.
+    """
+    from app.core.config import settings
+
+    monkeypatch.setattr(settings, "rate_limit_enabled", False)
+
+
 async def _stub_completion(messages, model, **kwargs):
     return "你好，我是 AI 助手"
 
@@ -155,3 +169,47 @@ async def test_ws_resumes_existing_session(db, monkeypatch):
     rows = result.scalars().all()
     # 2 messages from the first turn + 2 from the resumed turn.
     assert len(rows) == 4
+
+
+@pytest.mark.asyncio
+async def test_ws_autotitles_session_from_first_message(db, monkeypatch):
+    """The session title is derived from the first user message."""
+    from app.services.chat_history import get_session
+
+    monkeypatch.setattr("app.ws.handler.chat_completion", _stub_completion)
+    ws = FakeWebSocket([_user_message("  帮我写一个登录功能  ")])
+    await chat_websocket(ws, db)
+    sid = ws.sent[0]["session_id"]
+
+    session = await get_session(db, sid)
+    assert session.title == "帮我写一个登录功能"
+
+
+@pytest.mark.asyncio
+async def test_ws_rate_limited_skips_model_and_keeps_socket(db, monkeypatch):
+    """Over-budget messages get an error frame; the model is not called."""
+    calls = {"n": 0}
+
+    async def _stub(messages, model, **kwargs):
+        calls["n"] += 1
+        return "ok"
+
+    async def _deny_second_message(ip, *, bucket="invoke"):
+        return calls["n"] < 1
+
+    monkeypatch.setattr("app.ws.handler.chat_completion", _stub)
+    monkeypatch.setattr("app.ws.handler.is_allowed", _deny_second_message)
+
+    ws = FakeWebSocket([_user_message("first"), _user_message("second")])
+    await chat_websocket(ws, db)
+
+    # Only the first message reached the model.
+    assert calls["n"] == 1
+    # The rate-limited second message produced an error frame and the socket
+    # stayed open.
+    types = [f["type"] for f in ws.sent]
+    assert types.count("error") == 1
+    assert ws.closed is None
+    assert any(
+        t == "message" for t in types
+    )  # the first reply still rendered

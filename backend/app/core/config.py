@@ -35,6 +35,11 @@ class Settings(BaseSettings):
     deepseek_models: str = "deepseek-v4-flash,deepseek-v4-pro"
     deepseek_default_model: str = "deepseek-v4-flash"
 
+    # Chat history bounds: cap stored messages per session so long-running
+    # conversations don't grow the table without bound (the model context is
+    # already bounded separately). Set to 0 to disable pruning.
+    chat_max_messages_per_session: int = 500
+
     # Security / rate limiting
     rate_limit_enabled: bool = True
     rate_limit_per_minute: int = 20

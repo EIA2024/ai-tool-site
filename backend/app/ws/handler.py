@@ -24,13 +24,16 @@ from fastapi import APIRouter, Depends, WebSocket, WebSocketDisconnect
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
+from app.core.ratelimit import is_allowed
 from app.db.session import get_db
 from app.models.base import utcnow
 from app.services.chat_history import (
     add_message,
+    auto_title_on_first_message,
     create_session,
-    get_messages,
+    get_context_messages,
     get_session,
+    prune_session_messages,
     touch_session,
 )
 from app.services.deepseek import DeepSeekError, chat_completion
@@ -59,6 +62,16 @@ def _origin_allowed(websocket: WebSocket) -> bool:
         # Non-browser client (curl, scripts) — allow.
         return True
     return origin.rstrip("/") in settings.cors_origins_list
+
+
+def _client_ip(websocket: WebSocket) -> str:
+    """Client address for rate limiting; best-effort like the REST layer.
+
+    ``websocket.client`` is ``(host, port)`` on a live socket but may be
+    absent in tests/doubles, so look it up defensively.
+    """
+    client = getattr(websocket, "client", None)
+    return client.host if client else "unknown"
 
 
 @router.websocket("/chat")
@@ -113,11 +126,21 @@ async def chat_websocket(
                 )
                 continue
 
+            # Every message triggers a paid DeepSeek call, so the socket is
+            # rate-limited like any other spend surface (per-IP bucket + the
+            # shared global budget). On over-budget we tell the client and
+            # skip the model call — the socket stays alive for the next try.
+            if not await is_allowed(_client_ip(websocket), bucket="chat"):
+                await websocket.send_text(
+                    json.dumps({"type": "error", "message": "请求过于频繁，请稍后再试"})
+                )
+                continue
+
             # Build conversation context BEFORE persisting so ordering never
             # depends on timestamp granularity (same-second messages can share
             # created_at). The last _CONTEXT_LIMIT stored messages plus this one.
             try:
-                history = await get_messages(db, session.id, limit=_MAX_CONTEXT_FETCH)
+                history = await get_context_messages(db, session.id, limit=_MAX_CONTEXT_FETCH)
             except Exception:
                 logger.warning(
                     "Failed to load chat context for session %s", session.id, exc_info=True
@@ -130,7 +153,7 @@ async def chat_websocket(
             context.append({"role": "user", "content": content})
 
             # Persist the user message (best-effort).
-            await _persist(db, session.id, "user", content)
+            await _persist(db, session, "user", content)
 
             # Tell the client we are working so it can show a typing state.
             await websocket.send_text(json.dumps({"type": "typing"}))
@@ -153,7 +176,7 @@ async def chat_websocket(
             }
             await websocket.send_text(json.dumps(response))
 
-            await _persist(db, session.id, "assistant", reply)
+            await _persist(db, session, "assistant", reply)
 
     except WebSocketDisconnect:
         logger.info("WebSocket disconnected, session_id=%s", session.id)
@@ -165,14 +188,23 @@ async def chat_websocket(
         await db.rollback()
 
 
-async def _persist(db: AsyncSession, session_id: str, role: str, content: str) -> None:
-    """Add one message and commit; on failure roll back and keep going."""
+async def _persist(db: AsyncSession, session, role: str, content: str) -> None:
+    """Add one message and commit; on failure roll back and keep going.
+
+    The session object is passed in so auto-titling can update it in-place
+    (ORM dirty-tracking persists the title with the same commit).
+    """
     try:
-        await add_message(db, session_id, role, content)
-        await touch_session(db, session_id)
+        if role == "user":
+            await auto_title_on_first_message(db, session, content)
+        await add_message(db, session.id, role, content)
+        await prune_session_messages(
+            db, session.id, settings.chat_max_messages_per_session
+        )
+        await touch_session(db, session.id)
         await db.commit()
     except Exception:
         await db.rollback()
         logger.warning(
-            "Failed to persist %s message for session %s", role, session_id
+            "Failed to persist %s message for session %s", role, session.id
         )

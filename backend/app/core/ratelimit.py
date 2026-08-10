@@ -94,17 +94,25 @@ async def _check(key: str, limit: int) -> bool:
     return await _allow_via_memory(key, limit)
 
 
-async def is_allowed(client_ip: str) -> bool:
-    """Return True if a request from ``client_ip`` may proceed."""
+async def is_allowed(client_ip: str, bucket: str = "invoke") -> bool:
+    """Return True if a request from ``client_ip`` may proceed.
+
+    ``bucket`` names the per-IP accounting window (e.g. ``"invoke"`` for tool
+    calls, ``"chat"`` for chat WebSocket messages) so each surface gets its
+    own per-IP budget. The global budget is shared across ALL buckets — that
+    is the real cap on total DeepSeek spend, so a client rotating IPs (or a
+    second surface) still cannot push total spend past
+    ``rate_limit_global_per_minute``.
+    """
     if not settings.rate_limit_enabled:
         return True
 
     # Per-IP bucket first: this is the usual access control signal.
-    ip_key = f"{client_ip}:invoke"
+    ip_key = f"{client_ip}:{bucket}"
     ip_limit = max(settings.rate_limit_per_minute, 1)
     if not await _check(ip_key, ip_limit):
         return False
 
-    # Global budget second: caps total spend across every client.
+    # Global budget second: caps total spend across every client and surface.
     global_limit = max(settings.rate_limit_global_per_minute, 1)
-    return await _check("global:invoke", global_limit)
+    return await _check("global", global_limit)

@@ -5,13 +5,16 @@ Row ids and timestamps are generated client-side, so objects are fully
 usable immediately after ``db.add`` without a refresh.
 """
 
-from sqlalchemy import select, update
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import ChatMessage, ChatSession
 from app.models.base import utcnow
 
 VALID_ROLES = ("user", "assistant", "system")
+
+# Titles that mean "no real title yet" — auto-titling replaces these.
+DEFAULT_TITLES = ("New Chat", "WebSocket Chat")
 
 
 async def create_session(
@@ -54,6 +57,24 @@ async def get_messages(
     return list(result.scalars().all())
 
 
+async def get_context_messages(
+    db: AsyncSession, session_id: str, limit: int = 200
+) -> list[ChatMessage]:
+    """Return the NEWEST ``limit`` messages in chronological (asc) order.
+
+    The naive ``get_messages(limit=limit)`` pulls the *oldest* rows, so a
+    session longer than ``limit`` would feed the model stale context. Fetch
+    descending (newest first) then reverse to keep the asc contract.
+    """
+    result = await db.execute(
+        select(ChatMessage)
+        .where(ChatMessage.session_id == session_id)
+        .order_by(ChatMessage.created_at.desc())
+        .limit(limit)
+    )
+    return list(reversed(result.scalars().all()))
+
+
 async def get_recent_sessions(
     db: AsyncSession, limit: int = 50
 ) -> list[ChatSession]:
@@ -72,6 +93,59 @@ async def touch_session(db: AsyncSession, session_id: str) -> None:
         .where(ChatSession.id == session_id)
         .values(updated_at=utcnow())
     )
+
+
+async def auto_title_on_first_message(
+    db: AsyncSession, session: ChatSession, content: str, max_len: int = 30
+) -> None:
+    """Give a session a real title from its first user message.
+
+    Fires only when the session still carries a placeholder title AND has no
+    stored messages yet, so a resumed conversation keeps its title. ``content``
+    is the incoming message, which has not been stored yet at call time.
+    """
+    if session.title in DEFAULT_TITLES:
+        existing = await db.scalar(
+            select(func.count())
+            .select_from(ChatMessage)
+            .where(ChatMessage.session_id == session.id)
+        )
+        if not existing:
+            title = " ".join(content.strip().split())[:max_len]
+            if title:
+                session.title = title
+
+
+async def prune_session_messages(
+    db: AsyncSession, session_id: str, max_count: int
+) -> int:
+    """Delete the oldest messages once a session exceeds ``max_count``.
+
+    Keeps chat history bounded for long-running conversations. Returns how
+    many rows were deleted (0 when under the cap or the cap is disabled).
+    Call after adding the new message, before the caller commits.
+    """
+    if max_count <= 0:
+        return 0
+    count = await db.scalar(
+        select(func.count())
+        .select_from(ChatMessage)
+        .where(ChatMessage.session_id == session_id)
+    )
+    if count <= max_count:
+        return 0
+    excess = count - max_count
+    result = await db.execute(
+        select(ChatMessage.id)
+        .where(ChatMessage.session_id == session_id)
+        .order_by(ChatMessage.created_at.asc())
+        .limit(excess)
+    )
+    ids = [row for (row,) in result.all()]
+    if not ids:
+        return 0
+    await db.execute(delete(ChatMessage).where(ChatMessage.id.in_(ids)))
+    return len(ids)
 
 
 async def delete_session(db: AsyncSession, session_id: str) -> bool:

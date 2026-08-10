@@ -88,3 +88,29 @@ async def test_is_allowed_checks_global_bucket(monkeypatch):
     assert await ratelimit.is_allowed("1.1.1.1") is True
     assert await ratelimit.is_allowed("2.2.2.2") is True  # distinct IP, same global budget
     assert await ratelimit.is_allowed("3.3.3.3") is False  # global budget exhausted
+
+
+@pytest.mark.asyncio
+async def test_is_allowed_buckets_have_independent_ip_limits(monkeypatch):
+    """Per-IP budgets are separate per bucket but share one global budget."""
+    from app.core.config import settings
+
+    monkeypatch.setattr(settings, "rate_limit_enabled", True)
+    monkeypatch.setattr(settings, "rate_limit_per_minute", 2)
+    monkeypatch.setattr(settings, "rate_limit_global_per_minute", 100)
+    monkeypatch.setattr(ratelimit, "_redis_ok", False)
+
+    # Exhaust the "invoke" bucket for this IP.
+    assert await ratelimit.is_allowed("1.1.1.1", bucket="invoke") is True
+    assert await ratelimit.is_allowed("1.1.1.1", bucket="invoke") is True
+    assert await ratelimit.is_allowed("1.1.1.1", bucket="invoke") is False
+    # The "chat" bucket is independent — still has its own budget.
+    assert await ratelimit.is_allowed("1.1.1.1", bucket="chat") is True
+
+    # Global budget is shared across buckets: clear the counters, then with
+    # a budget of 1 the first caller (via invoke) fills it and a second
+    # caller (via chat) is denied.
+    ratelimit._memory.clear()
+    monkeypatch.setattr(settings, "rate_limit_global_per_minute", 1)
+    assert await ratelimit.is_allowed("9.9.9.9", bucket="invoke") is True
+    assert await ratelimit.is_allowed("8.8.8.8", bucket="chat") is False
