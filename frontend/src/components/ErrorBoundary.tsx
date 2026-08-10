@@ -27,8 +27,11 @@ export default class ErrorBoundary extends Component<Props, State> {
   }
 
   private reset = () => {
-    this.setState({ error: null });
-    window.location.hash = "#/";
+    // This boundary wraps <BrowserRouter> (see main.tsx), so router hooks are
+    // unavailable here. A hash assignment wouldn't navigate — BrowserRouter
+    // listens for popstate, not hashchange — so do a full navigation to the
+    // tool list. The reload also remounts the tree fresh, clearing the error.
+    window.location.assign("/");
   };
 
   render() {
