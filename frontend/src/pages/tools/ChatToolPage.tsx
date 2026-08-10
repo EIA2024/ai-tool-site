@@ -12,6 +12,9 @@ import ChatInput from "../../components/chat/ChatInput";
 
 interface UiMessage extends WsMessage {
   localId: string;
+  /** True only while this assistant reply is still streaming — ChatMessage
+   * renders it as cheap plain text until the final frame marks it done. */
+  streaming?: boolean;
 }
 
 let localCounter = 0;
@@ -63,12 +66,19 @@ export default function ChatToolPage() {
 
   // Follow the conversation: scroll to the latest message whenever bubbles or
   // the typing indicator change — but only if the user is already near the
-  // bottom (stickToBottomRef), so reading history isn't interrupted.
+  // bottom (stickToBottomRef), so reading history isn't interrupted. The
+  // scroll runs on the next animation frame (not synchronously in the effect)
+  // so a burst of streamed chunks coalesces into one layout pass instead of
+  // forcing a reflow on every single delta.
   useEffect(() => {
-    const el = messagesRef.current;
-    if (el && stickToBottomRef.current) {
-      el.scrollTop = el.scrollHeight;
-    }
+    if (!stickToBottomRef.current) return;
+    const raf = requestAnimationFrame(() => {
+      const el = messagesRef.current;
+      if (el && stickToBottomRef.current) {
+        el.scrollTop = el.scrollHeight;
+      }
+    });
+    return () => cancelAnimationFrame(raf);
   }, [messages, typing]);
 
   const handleMessagesScroll = () => {
@@ -152,7 +162,9 @@ export default function ChatToolPage() {
               streamingRef.current.text += text;
               const { id, text: full } = streamingRef.current;
               setMessages((prev) =>
-                prev.map((m) => (m.localId === id ? { ...m, content: full } : m))
+                prev.map((m) =>
+                  m.localId === id ? { ...m, content: full, streaming: true } : m
+                )
               );
             } else {
               const id = `stream-${localCounter++}`;
@@ -165,6 +177,7 @@ export default function ChatToolPage() {
                   sender: "assistant",
                   timestamp: new Date().toISOString(),
                   localId: id,
+                  streaming: true,
                 },
               ]);
             }
@@ -196,7 +209,11 @@ export default function ChatToolPage() {
               const id = streamingRef.current.id;
               streamingRef.current = null;
               setMessages((prev) =>
-                prev.map((m) => (m.localId === id ? { ...m, content: msg.content ?? "" } : m))
+                prev.map((m) =>
+                  m.localId === id
+                    ? { ...m, content: msg.content ?? "", streaming: false }
+                    : m
+                )
               );
             } else {
               // No preceding chunks (e.g. a failure-path reply) — append.
@@ -347,7 +364,7 @@ export default function ChatToolPage() {
               </p>
             )}
             {messages.map((msg) => (
-              <ChatMessage key={msg.localId} message={msg} />
+              <ChatMessage key={msg.localId} message={msg} plain={msg.streaming} />
             ))}
             {typing && (
               <div className="chat-typing">

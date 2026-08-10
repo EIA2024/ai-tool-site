@@ -17,6 +17,14 @@ import { Fragment, useState, type ReactNode } from "react";
 
 interface Props {
   content: string;
+  /**
+   * Streaming replies render as plain text (no markdown parse) until the
+   * final ``message`` frame lands. Per chunk this is O(1) instead of
+   * re-parsing the whole accumulated reply, and it avoids mid-stream
+   * markdown flicker (unclosed fences, half-typed syntax). The final frame
+   * drops the flag and the reply "upgrades" to formatted markdown.
+   */
+  plain?: boolean;
 }
 
 type Block =
@@ -193,7 +201,17 @@ function CodeBlock({ lang, code }: { lang: string; code: string }) {
   );
 }
 
-export default function MessageContent({ content }: Props) {
+export default function MessageContent({ content, plain = false }: Props) {
+  if (plain) {
+    // Streaming bubble: emit the raw text as one paragraph (no markdown
+    // parsing). ``pre-wrap`` in the CSS keeps any real model newlines, and
+    // React escapes the text so nothing untrusted can inject markup.
+    return (
+      <div className="msg-content">
+        <p className="msg-text">{content}</p>
+      </div>
+    );
+  }
   const blocks = splitBlocks(content);
   return (
     <div className="msg-content">
