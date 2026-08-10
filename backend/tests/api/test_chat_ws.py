@@ -362,6 +362,25 @@ def test_trim_context_bounds_model_memory():
 
 
 @pytest.mark.asyncio
+async def test_ws_handles_non_dict_json_without_crash(db, monkeypatch):
+    """A bare array/string/number is valid JSON but has no .get — it must be
+    treated as raw message text, not crash the socket on an AttributeError."""
+    seen = []
+
+    async def _stub(messages, model, **kwargs):
+        seen.append([m for m in messages if m["role"] == "user"][-1]["content"])
+        yield "ok"
+
+    monkeypatch.setattr("app.ws.handler.chat_completion_stream", _stub)
+    ws = FakeWebSocket(["[1, 2, 3]", "真正的问题"])
+    await chat_websocket(ws, db)
+
+    assert ws.closed is None  # socket survived the non-dict JSON
+    # The raw JSON text was treated as the user's message content.
+    assert seen == ["[1, 2, 3]", "真正的问题"]
+
+
+@pytest.mark.asyncio
 async def test_ws_rate_limited_skips_model_and_keeps_socket(db, monkeypatch):
     """Over-budget messages get an error frame; the model is not called."""
     calls = {"n": 0}

@@ -144,11 +144,18 @@ async def chat_websocket(
         while True:
             data = await websocket.receive_text()
             model = ""
+            # ``json.loads`` succeeds for *any* JSON — a bare array, string,
+            # number or null is valid JSON but has no ``.get``. Guard with an
+            # isinstance check so such a message is treated as raw text content
+            # instead of crashing the socket on an AttributeError.
             try:
-                msg = json.loads(data)
-                content = str(msg.get("content", ""))
-                model = str(msg.get("model") or "").strip()
+                parsed = json.loads(data)
             except (json.JSONDecodeError, TypeError):
+                parsed = None
+            if isinstance(parsed, dict):
+                content = str(parsed.get("content", ""))
+                model = str(parsed.get("model") or "").strip()
+            else:
                 content = data
             content = content.strip()
 

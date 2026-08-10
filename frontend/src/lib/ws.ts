@@ -48,8 +48,16 @@ export class WsClient {
       this.attempt = 0; // healthy again — reset backoff
       this.onStatus("connected");
     };
-    this.ws.onclose = () => {
+    this.ws.onclose = (event) => {
       this.onStatus("disconnected");
+      // 1008 = policy rejection (e.g. the server refuses our Origin). That is
+      // permanent — the next attempt would hit the same wall — so don't loop
+      // forever hammering a rejected endpoint. Everything else (network blip,
+      // server restart) still reconnects with backoff.
+      if (event.code === 1008) {
+        this.shouldReconnect = false;
+        return;
+      }
       this.scheduleReconnect();
     };
     this.ws.onerror = () => {
