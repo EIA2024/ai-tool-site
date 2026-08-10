@@ -7,10 +7,13 @@ Design (first principles):
   endpoint stays scriptable.
 - Session resume: the client may reconnect with ``?session_id=...`` and the
   same conversation continues in the same DB row.
+- Real AI replies: each user message is answered by DeepSeek, with the last
+  ``_CONTEXT_LIMIT`` stored messages as conversation memory. The user sees a
+  ``typing`` frame while the model works.
 - Timestamps come from ``utcnow()`` (naive UTC), never the deprecated
   ``datetime.utcnow()``, and messages are stored with the ``assistant`` role
   (``bot`` was normalized away in migration 004).
-- Persistence is best-effort: a DB failure is logged and the echo still
+- Persistence is best-effort: a DB failure is logged and the reply still
   reaches the client instead of killing the socket.
 """
 
@@ -26,14 +29,28 @@ from app.models.base import utcnow
 from app.services.chat_history import (
     add_message,
     create_session,
+    get_messages,
     get_session,
     touch_session,
 )
+from app.services.deepseek import DeepSeekError, chat_completion
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
 _MAX_CONTENT = 10000
+_CONTEXT_LIMIT = 20  # most recent stored messages fed to the model as memory
+_MAX_CONTEXT_FETCH = 200  # rows pulled (asc), tail taken — oldest are skipped
+
+_SYSTEM_PROMPT = (
+    "你是一个友好的 AI 助手，运行在用户的 AI 工具站里，通过 WebSocket 聊天。"
+    "用中文回答，简洁准确，除代码外不需要 Markdown 排版。"
+)
+
+
+def _map_role(role: str) -> str:
+    """DB roles user/assistant/system map 1:1; anything else is user-like."""
+    return role if role in ("user", "assistant", "system") else "user"
 
 
 def _origin_allowed(websocket: WebSocket) -> bool:
@@ -96,10 +113,38 @@ async def chat_websocket(
                 )
                 continue
 
+            # Build conversation context BEFORE persisting so ordering never
+            # depends on timestamp granularity (same-second messages can share
+            # created_at). The last _CONTEXT_LIMIT stored messages plus this one.
+            try:
+                history = await get_messages(db, session.id, limit=_MAX_CONTEXT_FETCH)
+            except Exception:
+                logger.warning(
+                    "Failed to load chat context for session %s", session.id, exc_info=True
+                )
+                history = []
+            context = [
+                {"role": _map_role(m.role), "content": m.content}
+                for m in history[-_CONTEXT_LIMIT:]
+            ]
+            context.append({"role": "user", "content": content})
+
             # Persist the user message (best-effort).
             await _persist(db, session.id, "user", content)
 
-            reply = f"Echo: {content}"
+            # Tell the client we are working so it can show a typing state.
+            await websocket.send_text(json.dumps({"type": "typing"}))
+
+            try:
+                reply = await chat_completion(
+                    [{"role": "system", "content": _SYSTEM_PROMPT}] + context,
+                    settings.deepseek_default_model,
+                )
+            except DeepSeekError as exc:
+                # Keep the socket alive; surface a visible, honest message.
+                reply = f"（AI 调用失败：{exc}）"
+                logger.warning("Chat AI failure for session %s: %s", session.id, exc)
+
             response = {
                 "type": "message",
                 "content": reply,

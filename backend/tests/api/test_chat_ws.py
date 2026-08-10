@@ -1,0 +1,157 @@
+"""WebSocket chat handler tests.
+
+The handler now answers each user message with a real DeepSeek reply and a
+``typing`` frame while the model works. We drive ``chat_websocket`` directly
+with a fake WebSocket (model call stubbed) so everything runs in the pytest
+event loop against the in-memory ``db`` fixture — no ASGI portal, no
+cross-event-loop teardown flakiness.
+"""
+
+import json
+
+import pytest
+from fastapi import WebSocketDisconnect
+from sqlalchemy import select
+
+from app.models.chat import ChatMessage
+from app.services.deepseek import DeepSeekError
+from app.ws.handler import chat_websocket
+
+
+class FakeWebSocket:
+    """Minimal WebSocket double: records frames, feeds incoming messages."""
+
+    def __init__(self, incoming=None, query_params=None):
+        self.headers = {}
+        self.query_params = query_params or {}
+        self.sent: list[dict] = []
+        self.closed: tuple[int, str] | None = None
+        self._incoming = list(incoming or [])
+        self._i = 0
+
+    async def accept(self):
+        pass
+
+    async def close(self, code: int = 1000, reason: str = ""):
+        self.closed = (code, reason)
+
+    async def send_text(self, text: str):
+        self.sent.append(json.loads(text))
+
+    async def receive_text(self) -> str:
+        if self._i < len(self._incoming):
+            item = self._incoming[self._i]
+            self._i += 1
+            return item if isinstance(item, str) else json.dumps(item)
+        raise WebSocketDisconnect()
+
+
+def _user_message(content: str) -> dict:
+    return {"type": "message", "content": content}
+
+
+async def _stub_completion(messages, model, **kwargs):
+    return "你好，我是 AI 助手"
+
+
+@pytest.mark.asyncio
+async def test_ws_ai_reply_flow(db, monkeypatch):
+    """connected → (typing → message) with the model context containing the user text."""
+    captured = {}
+
+    async def _stub(messages, model, **kwargs):
+        captured["model"] = model
+        captured["context"] = messages
+        return "你好，我是 AI 助手"
+
+    monkeypatch.setattr("app.ws.handler.chat_completion", _stub)
+    ws = FakeWebSocket([_user_message("你好")])
+    await chat_websocket(ws, db)
+
+    types = [f["type"] for f in ws.sent]
+    assert types == ["connected", "typing", "message"]
+    assert ws.sent[0].get("session_id")
+
+    assert captured["context"][0]["role"] == "system"
+    assert any(
+        m["role"] == "user" and m["content"] == "你好" for m in captured["context"]
+    )
+
+    reply = ws.sent[2]
+    assert reply["sender"] == "assistant"
+    assert reply["content"] == "你好，我是 AI 助手"
+
+
+@pytest.mark.asyncio
+async def test_ws_conversation_memory_in_context(db, monkeypatch):
+    """Prior stored messages are fed back to the model as context."""
+    seen = []
+
+    async def _stub(messages, model, **kwargs):
+        seen.append(messages)
+        return "ok"
+
+    monkeypatch.setattr("app.ws.handler.chat_completion", _stub)
+    ws = FakeWebSocket([_user_message("我叫小明"), _user_message("我叫什么？")])
+    await chat_websocket(ws, db)
+
+    assert len(seen) == 2
+    second_context = [m["content"] for m in seen[1]]
+    # The model sees both stored turns as context for the second reply.
+    assert "我叫小明" in second_context
+    assert "我叫什么？" in second_context
+
+
+@pytest.mark.asyncio
+async def test_ws_surfaces_ai_failure_and_keeps_socket(db, monkeypatch):
+    """A DeepSeek failure sends an honest assistant message, socket stays alive."""
+    async def _fail(messages, model, **kwargs):
+        raise DeepSeekError("无法连接 DeepSeek API", retryable=True)
+
+    monkeypatch.setattr("app.ws.handler.chat_completion", _fail)
+    ws = FakeWebSocket([_user_message("hi")])
+    await chat_websocket(ws, db)
+
+    assert ws.closed is None  # socket not killed
+    reply = ws.sent[-1]
+    assert reply["type"] == "message"
+    assert "AI 调用失败" in reply["content"]
+
+
+@pytest.mark.asyncio
+async def test_ws_persists_user_and_assistant(db, monkeypatch):
+    """Both roles land in the DB for history reload."""
+    monkeypatch.setattr("app.ws.handler.chat_completion", _stub_completion)
+    ws = FakeWebSocket([_user_message("persist me")])
+    await chat_websocket(ws, db)
+
+    result = await db.execute(
+        select(ChatMessage).order_by(ChatMessage.created_at)
+    )
+    rows = result.scalars().all()
+    roles = [r.role for r in rows]
+    assert roles == ["user", "assistant"]
+    contents = [r.content for r in rows]
+    assert "persist me" in contents
+    assert "你好，我是 AI 助手" in contents
+
+
+@pytest.mark.asyncio
+async def test_ws_resumes_existing_session(db, monkeypatch):
+    """Reconnecting with session_id continues the same conversation."""
+    monkeypatch.setattr("app.ws.handler.chat_completion", _stub_completion)
+
+    first = FakeWebSocket([_user_message("hello")])
+    await chat_websocket(first, db)
+    sid = first.sent[0]["session_id"]
+
+    second = FakeWebSocket([_user_message("again")], query_params={"session_id": sid})
+    await chat_websocket(second, db)
+
+    assert second.sent[0]["session_id"] == sid
+    result = await db.execute(
+        select(ChatMessage).order_by(ChatMessage.created_at)
+    )
+    rows = result.scalars().all()
+    # 2 messages from the first turn + 2 from the resumed turn.
+    assert len(rows) == 4

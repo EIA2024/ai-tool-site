@@ -19,6 +19,7 @@ let localCounter = 0;
 export default function ChatToolPage() {
   const [messages, setMessages] = useState<UiMessage[]>([]);
   const [status, setStatus] = useState("disconnected");
+  const [typing, setTyping] = useState(false);
   const [sessions, setSessions] = useState<ChatSession[]>([]);
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [loadingSessions, setLoadingSessions] = useState(true);
@@ -87,6 +88,14 @@ export default function ChatToolPage() {
             );
             return;
           }
+          // Non-terminal signals — not messages, don't render as bubbles.
+          if (msg.type === "typing") {
+            setTyping(true);
+            return;
+          }
+          if (msg.type === "message") {
+            setTyping(false);
+          }
           setMessages((prev) => [
             ...prev,
             { ...msg, localId: `ws-${localCounter++}` },
@@ -103,6 +112,7 @@ export default function ChatToolPage() {
   const handleNewSession = async () => {
     setActiveSessionId(null);
     setMessages([]);
+    setTyping(false);
     connectTo(null);
     // The "connected" message carries the freshly-created session id.
   };
@@ -110,6 +120,7 @@ export default function ChatToolPage() {
   const handleSelectSession = async (sessionId: string) => {
     setActiveSessionId(sessionId);
     setMessages([]);
+    setTyping(false);
     await loadHistory(sessionId);
     connectTo(sessionId);
   };
@@ -127,11 +138,26 @@ export default function ChatToolPage() {
       clientRef.current?.disconnect();
       setActiveSessionId(null);
       setMessages([]);
+      setTyping(false);
     }
     setSessions((prev) => prev.filter((s) => s.id !== sessionId));
   };
 
   const send = (content: string) => {
+    if (status !== "connected") return;
+    // Show the user's message immediately; the server only streams back the
+    // assistant reply, so without this optimistic bubble the user's own text
+    // would stay invisible until a history reload.
+    setMessages((prev) => [
+      ...prev,
+      {
+        type: "message",
+        content,
+        sender: "user",
+        timestamp: new Date().toISOString(),
+        localId: `local-${localCounter++}`,
+      },
+    ]);
     clientRef.current?.send(content);
   };
 
@@ -192,6 +218,13 @@ export default function ChatToolPage() {
             {messages.map((msg) => (
               <ChatMessage key={msg.localId} message={msg} />
             ))}
+            {typing && (
+              <div className="chat-typing">
+                <span className="dot" />
+                <span className="dot" />
+                <span className="dot" />
+              </div>
+            )}
           </div>
 
           <ChatInput onSend={send} disabled={status !== "connected"} />

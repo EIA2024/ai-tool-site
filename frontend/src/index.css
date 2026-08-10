@@ -246,6 +246,39 @@ button:disabled {
   align-self: flex-start;
   background: var(--border);
 }
+.chat-typing {
+  display: inline-flex;
+  gap: 0.3rem;
+  align-self: flex-start;
+  padding: 0.5rem 0.9rem;
+  border-radius: 0.5rem;
+  background: var(--border);
+}
+.chat-typing .dot {
+  width: 0.45rem;
+  height: 0.45rem;
+  border-radius: 50%;
+  background: var(--text-dim);
+  animation: typing-pulse 1.2s infinite ease-in-out;
+}
+.chat-typing .dot:nth-child(2) {
+  animation-delay: 0.2s;
+}
+.chat-typing .dot:nth-child(3) {
+  animation-delay: 0.4s;
+}
+@keyframes typing-pulse {
+  0%,
+  60%,
+  100% {
+    opacity: 0.35;
+    transform: translateY(0);
+  }
+  30% {
+    opacity: 1;
+    transform: translateY(-2px);
+  }
+}
 .chat-input {
   display: flex;
   gap: 0.5rem;

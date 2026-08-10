@@ -1,18 +1,21 @@
-"""Self-contained DeepSeek integration for the Task Decomposer tool.
+"""DeepSeek integration for the Task Decomposer tool.
 
-Handles prompt construction, API call, JSON validation,
-and deterministic agent_prompt generation.
+Handles prompt construction, JSON validation, deterministic agent_prompt
+generation, and a bounded retry for the model's non-deterministic JSON.
+The raw HTTP call lives in the shared ``app.services.deepseek`` client.
 """
 
 import json
 from typing import Annotated
 
-import httpx
 from pydantic import BaseModel, Field, StringConstraints
 
-from app.core.config import settings
-
-DEEPSEEK_URL = "https://api.deepseek.com/chat/completions"
+from app.services.deepseek import (
+    DeepSeekError as DeepSeekClientError,
+)
+from app.services.deepseek import (
+    chat_completion,
+)
 
 # Each risk hint is short; the per-item cap keeps the prompt (and thus the
 # model spend) bounded even if a client sends many verbose hints.
@@ -45,20 +48,6 @@ class ModelTaskAnalysis(BaseModel):
 
 class TaskAnalysis(ModelTaskAnalysis):
     agent_prompt: str = Field(min_length=1)
-
-
-class DeepSeekClientError(RuntimeError):
-    """DeepSeek integration failure.
-
-    ``retryable`` marks failures where a fresh attempt has a real chance of
-    succeeding (transient transport errors, 5xx, non-deterministic model
-    JSON). 4xx auth/quota errors are never retryable — a retry cannot fix
-    them and would only burn quota or lock the account.
-    """
-
-    def __init__(self, message: str, *, retryable: bool = False):
-        super().__init__(message)
-        self.retryable = retryable
 
 
 # ── Prompt building ──
@@ -161,71 +150,25 @@ def build_agent_prompt(analysis: ModelTaskAnalysis) -> str:
 # ── DeepSeek API call ──
 
 
-def _resolve_api_key(input_data: AnalyzeTaskInput) -> str:
-    """Resolve API key: prefer .env, fall back to session key."""
-    if settings.deepseek_api_key:
-        return settings.deepseek_api_key
-    if input_data.session_api_key:
-        if not input_data.session_api_key.startswith("sk-"):
-            raise DeepSeekClientError(
-                "会话 API Key 格式无效：必须以 'sk-' 开头，或改用 .env 中的服务端 Key。"
-            )
-        return input_data.session_api_key
-    raise DeepSeekClientError("未配置 DeepSeek API Key。请在 .env 中设置，或在页面输入临时 Key。")
-
-
 async def _call_deepseek_once(input_data: AnalyzeTaskInput) -> ModelTaskAnalysis:
     """Run a single completion and parse the model's JSON into the schema.
 
-    Raises ``DeepSeekClientError`` with a diagnostic message; returns the
-    parsed analysis on success.
+    The HTTP call itself lives in the shared DeepSeek client; this function
+    only attaches the tool's prompt and validates the model's JSON against
+    the task-card schema. Raises ``DeepSeekClientError`` on any failure.
     """
-    api_key = _resolve_api_key(input_data)
-
-    body = {
-        "model": input_data.model,
-        "messages": [
+    content = await chat_completion(
+        [
             {"role": "system", "content": build_system_prompt()},
             {"role": "user", "content": build_user_prompt(input_data)},
         ],
-        "response_format": {"type": "json_object"},
-        "temperature": 0.2,
-        "max_tokens": 2200,
-        "stream": False,
-    }
-    headers = {
-        "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json",
-    }
-
-    try:
-        async with httpx.AsyncClient(timeout=60) as client:
-            response = await client.post(DEEPSEEK_URL, headers=headers, json=body)
-    except httpx.HTTPError as exc:
-        raise DeepSeekClientError("无法连接 DeepSeek API", retryable=True) from exc
-
-    if response.status_code >= 400:
-        # Include the upstream detail (truncated) so operators can diagnose
-        # auth/quota errors without a network trace.
-        detail = (response.text or "").strip()[:300]
-        suffix = f": {detail}" if detail else ""
-        # 5xx/rate-limit are transient and worth a retry; 4xx (auth, quota,
-        # unknown model) will fail identically on a retry.
-        raise DeepSeekClientError(
-            f"DeepSeek API 返回错误：HTTP {response.status_code}{suffix}",
-            retryable=response.status_code >= 500,
-        )
-
-    try:
-        payload = response.json()
-        content = payload["choices"][0]["message"]["content"]
-    except (KeyError, IndexError, TypeError, json.JSONDecodeError) as exc:
-        raise DeepSeekClientError("DeepSeek 返回结构异常", retryable=True) from exc
-
-    if not content or not content.strip():
-        raise DeepSeekClientError(
-            "DeepSeek 返回空内容，请调整 prompt 后重试", retryable=True
-        )
+        input_data.model,
+        api_key=input_data.session_api_key,
+        max_tokens=2200,
+        temperature=0.2,
+        response_format={"type": "json_object"},
+        timeout=60,
+    )
 
     try:
         return ModelTaskAnalysis.model_validate(json.loads(content))
