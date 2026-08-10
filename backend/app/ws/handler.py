@@ -238,11 +238,27 @@ async def chat_websocket(
                         json.dumps({"type": "chunk", "content": delta})
                     )
                 reply = "".join(chunks)
+            except WebSocketDisconnect:
+                # Client vanished mid-stream — propagate so the handler's
+                # disconnect path runs (the finally below still closes the
+                # generator's transport).
+                raise
             except DeepSeekError as exc:
                 # Keep the socket alive; surface a visible, honest message.
                 # (Also covers the retryable empty-stream error above.)
                 reply = f"（AI 调用失败：{exc}）"
                 logger.warning("Chat AI failure for session %s: %s", session.id, exc)
+            except Exception as exc:
+                # Defense in depth: a malformed upstream line (bad bytes on the
+                # wire, a non-httpx parse error) must not kill the whole chat.
+                # Surface it as an honest message and keep the socket alive.
+                reply = "（AI 调用失败：模型输出异常）"
+                logger.warning(
+                    "Unexpected error streaming reply for session %s: %s",
+                    session.id,
+                    exc,
+                    exc_info=True,
+                )
             finally:
                 # Release the transport even if the client dropped mid-stream
                 # (a send failing mid-generator would otherwise leave the

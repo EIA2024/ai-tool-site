@@ -381,6 +381,29 @@ async def test_ws_handles_non_dict_json_without_crash(db, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_ws_surfaces_non_deepseek_stream_error_and_keeps_socket(db, monkeypatch):
+    """A malformed upstream line (a non-DeepSeek exception mid-stream) must not
+    kill the socket — it degrades to an honest failure message."""
+    async def _bomb(messages, model, **kwargs):
+        yield "部分回复"
+        raise UnicodeDecodeError("utf-8", b"\xff", 0, 1, "bad bytes")
+        yield  # unreachable — makes this an async generator
+
+    monkeypatch.setattr("app.ws.handler.chat_completion_stream", _bomb)
+    ws = FakeWebSocket([_user_message("hi")])
+    await chat_websocket(ws, db)
+
+    assert ws.closed is None  # socket survives the malformed stream
+    types = [f["type"] for f in ws.sent]
+    # The chunk that streamed in before the error is visible, then the final
+    # message frame reports the failure rather than the partial reply.
+    assert types.count("chunk") == 1
+    reply = ws.sent[-1]
+    assert reply["type"] == "message"
+    assert "AI 调用失败" in reply["content"]
+
+
+@pytest.mark.asyncio
 async def test_ws_rate_limited_skips_model_and_keeps_socket(db, monkeypatch):
     """Over-budget messages get an error frame; the model is not called."""
     calls = {"n": 0}
