@@ -1,4 +1,5 @@
 import type { WsMessage } from "../../types";
+import MessageContent from "./MessageContent";
 
 interface Props {
   message: WsMessage;
@@ -13,7 +14,8 @@ export default function ChatMessage({ message }: Props) {
   const content = message.content || message.message || "";
   return (
     <div className={`chat-message message-${cls}`}>
-      <strong>{sender}:</strong> {content}
+      <strong>{sender}:</strong>
+      <MessageContent content={content} />
     </div>
   );
 }

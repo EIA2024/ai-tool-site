@@ -261,6 +261,92 @@ button:disabled {
   color: var(--text-dim);
   font-size: 0.85rem;
 }
+
+/* ── Lightweight markdown inside message bubbles ── */
+.msg-content {
+  min-width: 0;
+  overflow-wrap: break-word;
+}
+.msg-content p {
+  margin: 0.2rem 0;
+  white-space: pre-wrap;
+}
+.msg-content p:first-child,
+.msg-content ul:first-child,
+.msg-content ol:first-child,
+.msg-content .msg-code:first-child {
+  margin-top: 0.25rem;
+}
+.msg-content ul,
+.msg-content ol {
+  margin: 0.25rem 0;
+  padding-left: 1.4rem;
+}
+.msg-content li {
+  margin: 0.15rem 0;
+}
+.msg-content code {
+  font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
+  font-size: 0.85em;
+  background: rgba(0, 0, 0, 0.28);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 0.25rem;
+  padding: 0.05rem 0.3rem;
+  white-space: pre-wrap;
+}
+.msg-content strong {
+  color: var(--text);
+}
+.msg-content a {
+  text-decoration: underline;
+}
+.msg-code {
+  margin: 0.4rem 0;
+  border: 1px solid var(--border);
+  border-radius: 0.4rem;
+  overflow: hidden;
+  background: #0b0d13;
+}
+.msg-code-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.3rem 0.6rem;
+  border-bottom: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.04);
+}
+.msg-code-lang {
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-dim);
+}
+.msg-code-copy {
+  font-size: 0.75rem;
+  padding: 0.15rem 0.5rem;
+  border-radius: 0.25rem;
+  border: 1px solid var(--border);
+  background: var(--bg-card);
+  color: var(--text-dim);
+  cursor: pointer;
+}
+.msg-code-copy:hover {
+  color: var(--text);
+  border-color: var(--accent);
+}
+.msg-code pre {
+  margin: 0;
+  padding: 0.6rem 0.75rem;
+  overflow-x: auto;
+  font-size: 0.82rem;
+  line-height: 1.45;
+}
+.msg-code pre code {
+  background: none;
+  border: none;
+  padding: 0;
+  white-space: pre;
+}
 .chat-typing {
   display: inline-flex;
   gap: 0.3rem;
