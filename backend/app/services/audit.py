@@ -1,6 +1,6 @@
 """Tool-call audit log (unit-of-work: no commits here)."""
 
-from sqlalchemy import func, select
+from sqlalchemy import case, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import ToolCallRecord
@@ -53,3 +53,24 @@ async def count_tool_calls(
         query = query.where(ToolCallRecord.success == success)
     result = await db.execute(query)
     return int(result.scalar_one())
+
+
+async def summarize_tool_calls(db: AsyncSession) -> list[dict]:
+    """Per-tool call/failure counts for the usage dashboard."""
+    result = await db.execute(
+        select(
+            ToolCallRecord.tool_id,
+            func.count().label("calls"),
+            func.sum(
+                case((ToolCallRecord.success.is_(False), 1), else_=0)
+            ).label("failures"),
+        ).group_by(ToolCallRecord.tool_id)
+    )
+    return [
+        {
+            "tool_id": tool_id,
+            "calls": int(calls),
+            "failures": int(failures or 0),
+        }
+        for tool_id, calls, failures in result.all()
+    ]

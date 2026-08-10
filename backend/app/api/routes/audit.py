@@ -1,6 +1,7 @@
 """Audit log API (operator-facing).
 
-Read-only view of tool-call audit records with optional filters.
+Read-only view of tool-call audit records with optional filters, plus a
+per-tool usage summary for the dashboard.
 """
 
 from fastapi import APIRouter, Depends
@@ -9,7 +10,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.errors import ok
 from app.db.session import get_db
 from app.models import ToolCallRecord
-from app.services.audit import count_tool_calls, list_tool_calls
+from app.services.audit import (
+    count_tool_calls,
+    list_tool_calls,
+    summarize_tool_calls,
+)
 
 router = APIRouter()
 
@@ -23,6 +28,14 @@ def _record_to_dict(record: ToolCallRecord) -> dict:
         "output_data": record.output_data,
         "created_at": record.created_at.isoformat() if record.created_at else None,
     }
+
+
+@router.get("/summary")
+async def audit_summary(db: AsyncSession = Depends(get_db)):
+    """Per-tool call/failure totals for the usage dashboard."""
+    by_tool = await summarize_tool_calls(db)
+    total = sum(t["calls"] for t in by_tool)
+    return ok({"total": total, "by_tool": by_tool})
 
 
 @router.get("/tool-calls")

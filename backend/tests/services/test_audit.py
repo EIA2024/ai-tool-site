@@ -2,7 +2,12 @@
 
 import pytest
 
-from app.services.audit import count_tool_calls, list_tool_calls, log_tool_call
+from app.services.audit import (
+    count_tool_calls,
+    list_tool_calls,
+    log_tool_call,
+    summarize_tool_calls,
+)
 
 
 @pytest.mark.asyncio
@@ -43,3 +48,19 @@ async def test_list_pagination(db):
     # newest first
     assert page[0].tool_id == "tool_3"
     assert page[1].tool_id == "tool_2"
+
+
+@pytest.mark.asyncio
+async def test_summary_groups_by_tool(db):
+    await log_tool_call(db, "blank_tool", None, None, True)
+    await log_tool_call(db, "task_decomposer", None, None, True)
+    await log_tool_call(db, "task_decomposer", None, None, False)
+    await db.commit()
+
+    summary = await summarize_tool_calls(db)
+    by_id = {row["tool_id"]: row for row in summary}
+
+    assert by_id["blank_tool"]["calls"] == 1
+    assert by_id["blank_tool"]["failures"] == 0
+    assert by_id["task_decomposer"]["calls"] == 2
+    assert by_id["task_decomposer"]["failures"] == 1

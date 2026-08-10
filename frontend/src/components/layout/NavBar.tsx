@@ -11,6 +11,7 @@ export default function NavBar() {
         <Link to="/tools/chat_tool">Chat Tool</Link>
         <Link to="/tools/code_agent_flow_viz">Flow Visualizer</Link>
         <Link to="/tools/task_decomposer">Task Decomposer</Link>
+        <Link to="/usage">Usage</Link>
       </div>
     </nav>
   );

@@ -28,6 +28,35 @@ export interface PublicConfig {
   deepseek_default_model: string;
 }
 
+/* ── Audit / usage ── */
+
+export interface AuditRecord {
+  id: string;
+  tool_id: string;
+  success: boolean;
+  input_data: string | null;
+  output_data: string | null;
+  created_at: string | null;
+}
+
+export interface ToolUsageSummary {
+  tool_id: string;
+  calls: number;
+  failures: number;
+}
+
+export interface AuditSummaryData {
+  total: number;
+  by_tool: ToolUsageSummary[];
+}
+
+export interface AuditListData {
+  records: AuditRecord[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
 /* ── Chat sessions & messages ── */
 
 export interface ChatSession {
