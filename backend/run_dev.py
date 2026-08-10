@@ -37,12 +37,41 @@ async def _init_db() -> None:
 
 
 def main() -> None:
+    import importlib
+
     import uvicorn
+    from uvicorn.supervisors.statreload import StatReload
 
     asyncio.run(_init_db())
     # NOTE: with reload=True the child process re-imports app.main directly;
     # the DATABASE_URL override above is inherited via os.environ.
-    uvicorn.run("app.main:app", host="0.0.0.0", port=8000, reload=True)
+    #
+    # Reload hardening (Windows + OneDrive-synced repo):
+    # - Watch only app/ so writing tests or the dev.db never triggers a reload.
+    # - Force the polling StatReload: this uvicorn build picks WatchFiles by
+    #   default whenever `watchfiles` is installed, and WatchFiles has a known
+    #   bug on Windows where a detected change shuts the worker down but never
+    #   spawns the replacement, wedging the port (observed twice). StatReload
+    #   polls mtimes and restarts reliably. Only the reloader process needs
+    #   the patch; the worker imports the app normally.
+    #   (uvicorn.main is shadowed by a click Command on the package, so grab
+    #   the real module via sys.modules.)
+    uvicorn_main = importlib.import_module("uvicorn.main")
+    uvicorn_main.ChangeReload = StatReload
+    uvicorn.run(
+        "app.main:app",
+        host="0.0.0.0",
+        port=8000,
+        reload=True,
+        reload_dirs=[str(_BACKEND_DIR / "app")],
+        reload_includes=["*.py"],
+        reload_excludes=[
+            "**/tests/**",
+            "**/__pycache__/**",
+            "**/.venv/**",
+            "**/dev.db",
+        ],
+    )
 
 
 if __name__ == "__main__":
