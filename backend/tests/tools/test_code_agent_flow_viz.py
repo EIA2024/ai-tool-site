@@ -32,6 +32,48 @@ def test_config_advertises_import_records():
 
 
 @pytest.mark.asyncio
+async def test_list_records_paginated_with_total(db):
+    """list_records pages (limit/offset) and reports the true total so the UI
+    count and the export path never silently truncate at the default 200."""
+    for i in range(3):
+        await tool.handle_invoke(
+            {"action": "import_records", "records": [_rec(f"s{i}", "u")]}, db
+        )
+    await db.commit()
+
+    page1 = await tool.handle_invoke(
+        {"action": "list_records", "limit": 2}, db
+    )
+    assert len(page1["records"]) == 2
+    assert page1["total"] == 3
+
+    page2 = await tool.handle_invoke(
+        {"action": "list_records", "limit": 2, "offset": 2}, db
+    )
+    assert len(page2["records"]) == 1
+    assert page2["total"] == 3
+
+    # Newest-first: page1 head is the last-imported record.
+    assert page1["records"][0]["stage_key"] == "s2"
+
+
+@pytest.mark.asyncio
+async def test_list_records_invalid_limit_rejected(db):
+    with pytest.raises(ValidationError) as excinfo:
+        await tool.handle_invoke(
+            {"action": "list_records", "limit": "not-a-number"}, db
+        )
+    assert excinfo.value.code == "VALIDATION_ERROR"
+
+
+@pytest.mark.asyncio
+async def test_list_records_empty_total_zero(db):
+    result = await tool.handle_invoke({"action": "list_records"}, db)
+    assert result["records"] == []
+    assert result["total"] == 0
+
+
+@pytest.mark.asyncio
 async def test_import_records_ok(db):
     result = await tool.handle_invoke(
         {"action": "import_records", "records": [_rec("s1", "u1"), _rec("s2", "u2")]},

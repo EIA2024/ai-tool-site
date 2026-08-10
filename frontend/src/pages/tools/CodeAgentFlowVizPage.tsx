@@ -309,6 +309,7 @@ export default function CodeAgentFlowVizPage() {
   const [feedback, setFeedback] = useState("");
   const [nextSteps, setNextSteps] = useState("");
   const [records, setRecords] = useState<PracticeRecord[]>([]);
+  const [recordsTotal, setRecordsTotal] = useState(0);
   const [summary, setSummary] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const [copiedZh, setCopiedZh] = useState(false);
@@ -325,6 +326,7 @@ export default function CodeAgentFlowVizPage() {
       });
       if (res.success && res.data) {
         setRecords(res.data.records);
+        setRecordsTotal(res.data.total ?? res.data.records.length);
         setBackendOk(true);
       } else {
         setBackendOk(false);
@@ -332,6 +334,26 @@ export default function CodeAgentFlowVizPage() {
     } catch {
       setBackendOk(false);
     }
+  }, []);
+
+  /* Fetch every record across pages — used by export, which must not silently
+     truncate at the list action's page size. */
+  const fetchAllRecords = useCallback(async (): Promise<PracticeRecord[]> => {
+    const all: PracticeRecord[] = [];
+    const PAGE = 1000;
+    for (let offset = 0; offset <= 1_000_000; offset += PAGE) {
+      const res = await invokeTool<ListRecordsData>("code_agent_flow_viz", {
+        action: "list_records",
+        limit: PAGE,
+        offset,
+      });
+      if (!res.success || !res.data) break;
+      const page = res.data.records;
+      if (page.length === 0) break;
+      all.push(...page);
+      if (page.length < PAGE) break; // last page
+    }
+    return all;
   }, []);
 
   /* Load records on mount */
@@ -355,6 +377,7 @@ export default function CodeAgentFlowVizPage() {
         const d = res.data;
         if (d.created) {
           setRecords((prev) => [d.record, ...prev]);
+          setRecordsTotal((prev) => prev + 1);
         }
         setBackendOk(true);
       } else {
@@ -450,19 +473,37 @@ export default function CodeAgentFlowVizPage() {
     setError(null);
   };
 
-  const handleExportJSON = () => {
-    const json = JSON.stringify(records, null, 2);
+  const handleExportJSON = async () => {
+    let all: PracticeRecord[];
+    try {
+      all = await fetchAllRecords();
+    } catch (err) {
+      setError(`Export failed: ${String(err)}`);
+      return;
+    }
+    if (all.length === 0) {
+      setError("No records to export.");
+      return;
+    }
+    const json = JSON.stringify(all, null, 2);
     const blob = new Blob([json], { type: "application/json" });
     downloadBlob(blob, "code-agent-practice-records.json");
   };
 
-  const handleExportMarkdown = () => {
-    if (records.length === 0) {
+  const handleExportMarkdown = async () => {
+    let all: PracticeRecord[];
+    try {
+      all = await fetchAllRecords();
+    } catch (err) {
+      setError(`Export failed: ${String(err)}`);
+      return;
+    }
+    if (all.length === 0) {
       setError("No records to export.");
       return;
     }
     const lines: string[] = ["# Code Agent Practice Records", ""];
-    for (const r of records) {
+    for (const r of all) {
       const stage = STAGES.find((s) => s.key === r.stage_key);
       lines.push(`## Stage ${stage?.number ?? "?"}: ${stage?.title ?? r.stage_key}`);
       lines.push("");
@@ -770,7 +811,7 @@ export default function CodeAgentFlowVizPage() {
             {/* History */}
             <div className="viz-history-section">
               <div className="viz-history-head">
-                <h3>History ({records.length})</h3>
+                <h3>History ({recordsTotal || records.length})</h3>
                 <div className="viz-history-actions-top">
                   <button className="viz-btn viz-btn-secondary viz-btn-sm" onClick={handleExportJSON} disabled={records.length === 0}>
                     Export JSON

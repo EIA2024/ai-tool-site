@@ -140,6 +140,8 @@ export interface SaveRecordData {
 
 export interface ListRecordsData {
   records: PracticeRecord[];
+  /** Total rows matching the query (for honest counts + pagination). */
+  total: number;
 }
 
 export interface ImportRecordsData {

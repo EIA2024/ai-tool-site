@@ -2,6 +2,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import NotFoundError, ValidationError
 from app.services.practice_records import (
+    count_records,
     create_record,
     delete_record,
     get_record,
@@ -42,8 +43,14 @@ class CodeAgentFlowVizTool(BaseTool):
         if action == "save_record":
             return await self._save(db, payload)
         if action == "list_records":
-            records = await list_records(db)
-            return {"records": [_record_to_dict(r) for r in records]}
+            limit = _int_param(payload, "limit", default=200, lo=1, hi=1000)
+            offset = _int_param(payload, "offset", default=0, lo=0, hi=1_000_000)
+            records = await list_records(db, limit=limit, offset=offset)
+            total = await count_records(db)
+            return {
+                "records": [_record_to_dict(r) for r in records],
+                "total": total,
+            }
         if action == "get_record":
             return {"record": _record_to_dict(await self._get(db, payload))}
         if action == "import_records":
@@ -117,6 +124,19 @@ def _bounded(value, field: str) -> str:
     if len(text) > 10000:
         raise ValidationError(f"{field} 超过最大长度 10000")
     return text
+
+
+def _int_param(payload: dict, key: str, default: int, lo: int, hi: int) -> int:
+    """Read an integer query param, clamped to ``[lo, hi]``.
+
+    A missing/invalid value falls back to ``default``; a non-numeric value is
+    a client error (typed ValidationError) rather than a 500.
+    """
+    try:
+        val = int(payload.get(key) or default)
+    except (TypeError, ValueError):
+        raise ValidationError(f"{key} 必须是整数")
+    return max(lo, min(val, hi))
 
 
 def _require_id(payload: dict) -> str:
