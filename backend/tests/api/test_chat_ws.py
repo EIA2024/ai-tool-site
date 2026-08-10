@@ -223,10 +223,10 @@ async def test_ws_empty_stream_degrades_gracefully(db, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_ws_passes_chat_budget_and_low_effort(db, monkeypatch):
-    """The chat model call requests the configured token budget and a capped
-    reasoning effort — V4 over-thinking otherwise truncates long answers
-    (the reported "1000 个随机数" empty-reply bug)."""
+async def test_ws_passes_chat_budget_and_thinking_policy(db, monkeypatch):
+    """The chat model call uses the configured budget and disables thinking by
+    default — V4 thinking burn otherwise truncates long answers (the reported
+    "1000 个随机数" empty-reply bug)."""
     captured = {}
 
     async def _stub(messages, model, **kwargs):
@@ -238,7 +238,28 @@ async def test_ws_passes_chat_budget_and_low_effort(db, monkeypatch):
     await chat_websocket(ws, db)
 
     assert captured["max_tokens"] == settings.chat_max_tokens
-    assert captured["reasoning_effort"] == settings.chat_reasoning_effort
+    assert captured["thinking"] is False  # thinking off unless configured on
+    assert captured["reasoning_effort"] is None  # effort only sent with thinking
+
+
+@pytest.mark.asyncio
+async def test_ws_passes_effort_when_thinking_enabled(db, monkeypatch):
+    """Re-enabling thinking in chat also sends a capped reasoning effort so
+    the model can't starve the answer again."""
+    monkeypatch.setattr(settings, "chat_thinking", True)
+    monkeypatch.setattr(settings, "chat_reasoning_effort", "low")
+    captured = {}
+
+    async def _stub(messages, model, **kwargs):
+        captured.update(kwargs)
+        yield "ok"
+
+    monkeypatch.setattr("app.ws.handler.chat_completion_stream", _stub)
+    ws = FakeWebSocket([_user_message("hi")])
+    await chat_websocket(ws, db)
+
+    assert captured["thinking"] is True
+    assert captured["reasoning_effort"] == "low"
 
 
 @pytest.mark.asyncio

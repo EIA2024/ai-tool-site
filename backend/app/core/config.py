@@ -35,17 +35,30 @@ class Settings(BaseSettings):
     deepseek_models: str = "deepseek-v4-flash,deepseek-v4-pro"
     deepseek_default_model: str = "deepseek-v4-flash"
 
+    # Documented DeepSeek V4 model limits (api-docs.deepseek.com → Models &
+    # Pricing): a 1M-token context window and a 384K-token maximum output.
+    # Config and request code reference these ceilings instead of hardcoding
+    # magic numbers.
+    deepseek_context_length: int = 1_000_000
+    deepseek_max_output_tokens: int = 384_000
+
     # Chat history bounds: cap stored messages per session so long-running
     # conversations don't grow the table without bound (the model context is
     # already bounded separately). Set to 0 to disable pruning.
     chat_max_messages_per_session: int = 500
 
-    # Chat model budget. V4 reasoning models default to high-effort thinking,
-    # which can exhaust max_tokens on reasoning alone and end the reply empty
-    # (finish_reason="length"). Chat asks for "low" effort and a generous
-    # budget so long requests still get an actual answer. Set
-    # CHAT_REASONING_EFFORT to an empty string to omit the field entirely.
-    chat_max_tokens: int = 8192
+    # Chat model budget, grounded in the documented limits above.
+    # V4 models default to high-effort thinking, and thinking counts toward
+    # max_tokens — a request that over-thinks ends with finish_reason="length"
+    # and an empty answer. Chat therefore disables thinking by default (fast,
+    # cheap, and that failure mode becomes impossible) and gives the answer a
+    # 16_384-token budget: ~4x the longest answer we have observed in testing,
+    # ~23x below the 384K ceiling, so it bounds cost/latency without ever
+    # truncating a normal reply. Operators who want chat to reason can set
+    # CHAT_THINKING=true and CHAT_REASONING_EFFORT (default "low") to cap the
+    # thinking burn. CHAT_REASONING_EFFORT="" omits the field entirely.
+    chat_max_tokens: int = 16_384
+    chat_thinking: bool = False
     chat_reasoning_effort: str = "low"
 
     # Audit-log retention: prune the oldest tool-call records once the table
@@ -93,6 +106,15 @@ class Settings(BaseSettings):
             raise ValueError(
                 f"deepseek_default_model '{self.deepseek_default_model}' must be one of "
                 f"deepseek_models ({self.deepseek_models_list})"
+            )
+        if self.chat_max_tokens > self.deepseek_max_output_tokens:
+            raise ValueError(
+                f"chat_max_tokens ({self.chat_max_tokens}) exceeds the documented "
+                f"DeepSeek max output ceiling ({self.deepseek_max_output_tokens})"
+            )
+        if self.chat_reasoning_effort not in ("", "low", "high", "max"):
+            raise ValueError(
+                "chat_reasoning_effort must be one of '', 'low', 'high', 'max'"
             )
         if self.app_env == "production":
             if self.database_url.startswith("postgresql+asyncpg://postgres:postgres@"):

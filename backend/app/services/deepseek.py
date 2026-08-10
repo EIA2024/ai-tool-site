@@ -53,16 +53,21 @@ async def chat_completion(
     response_format: dict[str, str] | None = None,
     timeout: float = 90.0,
     reasoning_effort: str | None = None,
+    thinking: bool | None = None,
 ) -> str:
     """Run one DeepSeek completion and return the assistant's content string.
 
-    ``reasoning_effort`` (``"low"``/``"high"``/``"max"``) caps how much the
-    model "thinks" before answering on V4 reasoning models; callers wanting a
-    fast answer (chat) pass ``"low"``. Pass ``None`` to let the API default.
+    ``thinking`` (``True``/``False``) toggles V4 thinking mode explicitly;
+    ``None`` leaves it at the API default (on). ``reasoning_effort``
+    (``"low"``/``"high"``/``"max"``) caps thinking depth; it is dropped when
+    thinking is disabled. ``max_tokens`` is clamped to the documented 384K
+    output ceiling so a misconfigured caller can't exceed the API limit.
 
     Raises ``DeepSeekError``; check ``retryable`` for the retry policy.
     """
     key = api_key or resolve_api_key()
+    # The API caps output at 384K tokens; clamp defensively.
+    max_tokens = min(max_tokens, settings.deepseek_max_output_tokens)
     body: dict = {
         "model": model,
         "messages": messages,
@@ -72,8 +77,10 @@ async def chat_completion(
     }
     if response_format:
         body["response_format"] = response_format
-    if reasoning_effort:
+    if reasoning_effort and thinking is not False:
         body["reasoning_effort"] = reasoning_effort
+    if thinking is not None:
+        body["thinking"] = {"type": "enabled" if thinking else "disabled"}
     headers = {
         "Authorization": f"Bearer {key}",
         "Content-Type": "application/json",
@@ -118,6 +125,7 @@ async def chat_completion_stream(
     response_format: dict[str, str] | None = None,
     timeout: float = 90.0,
     reasoning_effort: str | None = None,
+    thinking: bool | None = None,
 ):
     """Run one DeepSeek completion with ``stream: True`` and yield content
     deltas as they arrive (async generator).
@@ -126,13 +134,16 @@ async def chat_completion_stream(
     check ``retryable``). The caller accumulates the yielded deltas into the
     full reply — nothing is buffered here.
 
-    ``reasoning_effort`` is passed through to the API. V4 reasoning models
+    ``thinking`` / ``reasoning_effort`` pass through to the API. V4 models
     "think" by default at ``high`` effort and the thinking counts toward
     ``max_tokens``; a request that over-thinks can end with ``finish_reason``
     ``"length"`` and zero ``content`` deltas. That case is reported distinctly
-    (the model ran out of budget thinking, not "returned nothing").
+    (the model ran out of budget thinking, not "returned nothing"). Chat
+    disables thinking entirely to make the failure impossible.
     """
     key = api_key or resolve_api_key()
+    # The API caps output at 384K tokens; clamp defensively.
+    max_tokens = min(max_tokens, settings.deepseek_max_output_tokens)
     body: dict = {
         "model": model,
         "messages": messages,
@@ -142,8 +153,10 @@ async def chat_completion_stream(
     }
     if response_format:
         body["response_format"] = response_format
-    if reasoning_effort:
+    if reasoning_effort and thinking is not False:
         body["reasoning_effort"] = reasoning_effort
+    if thinking is not None:
+        body["thinking"] = {"type": "enabled" if thinking else "disabled"}
     headers = {
         "Authorization": f"Bearer {key}",
         "Content-Type": "application/json",

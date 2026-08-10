@@ -230,11 +230,18 @@ async def chat_websocket(
             stream = chat_completion_stream(
                 [{"role": "system", "content": _SYSTEM_PROMPT}] + context,
                 model or settings.deepseek_default_model,
-                # Chat wants a fast answer, not max thinking: cap the V4
-                # reasoning effort and give the answer headroom so long
-                # requests don't get truncated while the model over-thinks.
+                # Chat budget grounded in the documented V4 limits: thinking
+                # is off by default (its token burn caused empty replies) and
+                # the answer gets chat_max_tokens of headroom. If an operator
+                # re-enables thinking, cap the effort so it can't starve the
+                # answer again.
                 max_tokens=settings.chat_max_tokens,
-                reasoning_effort=settings.chat_reasoning_effort or None,
+                thinking=settings.chat_thinking,
+                reasoning_effort=(
+                    settings.chat_reasoning_effort or None
+                    if settings.chat_thinking
+                    else None
+                ),
             )
             try:
                 async for delta in stream:

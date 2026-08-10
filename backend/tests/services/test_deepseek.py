@@ -106,6 +106,68 @@ async def test_stream_passes_reasoning_effort(monkeypatch, fake_client):
 
 
 @pytest.mark.asyncio
+async def test_stream_thinking_disabled(monkeypatch, fake_client):
+    """thinking=False maps to the documented toggle and drops the effort field
+    (effort is meaningless without thinking)."""
+    monkeypatch.setattr(settings, "deepseek_api_key", "sk-test")
+    client = fake_client(_sse({"content": "ok"}, finish="stop"))
+    await _collect(
+        chat_completion_stream(
+            [{"role": "user", "content": "hi"}],
+            "deepseek-v4-flash",
+            thinking=False,
+            reasoning_effort="low",
+        )
+    )
+    body = _body(client)
+    assert body["thinking"] == {"type": "disabled"}
+    assert "reasoning_effort" not in body
+
+
+@pytest.mark.asyncio
+async def test_stream_thinking_enabled(monkeypatch, fake_client):
+    monkeypatch.setattr(settings, "deepseek_api_key", "sk-test")
+    client = fake_client(_sse({"content": "ok"}, finish="stop"))
+    await _collect(
+        chat_completion_stream(
+            [{"role": "user", "content": "hi"}],
+            "deepseek-v4-flash",
+            thinking=True,
+        )
+    )
+    assert _body(client)["thinking"] == {"type": "enabled"}
+
+
+@pytest.mark.asyncio
+async def test_stream_omits_thinking_when_absent(monkeypatch, fake_client):
+    """None leaves thinking at the API default (on) — no thinking field sent."""
+    monkeypatch.setattr(settings, "deepseek_api_key", "sk-test")
+    client = fake_client(_sse({"content": "ok"}, finish="stop"))
+    await _collect(
+        chat_completion_stream(
+            [{"role": "user", "content": "hi"}], "deepseek-v4-flash"
+        )
+    )
+    assert "thinking" not in _body(client)
+
+
+@pytest.mark.asyncio
+async def test_stream_clamps_max_tokens_to_documented_ceiling(monkeypatch, fake_client):
+    """A caller asking for more than the documented 384K output cap is clamped,
+    so the API limit can never be exceeded by a misconfigured max_tokens."""
+    monkeypatch.setattr(settings, "deepseek_api_key", "sk-test")
+    client = fake_client(_sse({"content": "ok"}, finish="stop"))
+    await _collect(
+        chat_completion_stream(
+            [{"role": "user", "content": "hi"}],
+            "deepseek-v4-flash",
+            max_tokens=500_000,
+        )
+    )
+    assert _body(client)["max_tokens"] == settings.deepseek_max_output_tokens
+
+
+@pytest.mark.asyncio
 async def test_stream_omits_reasoning_effort_when_absent(monkeypatch, fake_client):
     monkeypatch.setattr(settings, "deepseek_api_key", "sk-test")
     client = fake_client(_sse({"content": "ok"}, finish="stop"))
