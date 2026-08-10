@@ -242,9 +242,16 @@ button:disabled {
   background: var(--accent);
   color: #fff;
 }
-.message-bot {
+.message-assistant {
   align-self: flex-start;
   background: var(--border);
+}
+.message-system {
+  align-self: flex-start;
+  background: transparent;
+  border: 1px dashed var(--border);
+  color: var(--text-dim);
+  font-size: 0.85rem;
 }
 .chat-typing {
   display: inline-flex;
