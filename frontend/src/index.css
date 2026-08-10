@@ -297,8 +297,9 @@ button:disabled {
 .chat-input {
   display: flex;
   gap: 0.5rem;
+  align-items: flex-end;
 }
-.chat-input input {
+.chat-input textarea {
   flex: 1;
   padding: 0.6rem 1rem;
   border: 1px solid var(--border);
@@ -306,8 +307,14 @@ button:disabled {
   background: var(--bg-card);
   color: var(--text);
   font-size: 0.9rem;
+  line-height: 1.4;
+  font-family: inherit;
+  resize: none;
+  overflow-y: auto;
+  min-height: 2.6rem;
+  max-height: 9rem;
 }
-.chat-input input:focus {
+.chat-input textarea:focus {
   outline: none;
   border-color: var(--accent);
 }
