@@ -160,6 +160,33 @@ async def test_chat_session_crud(api_client):
 
 
 @pytest.mark.asyncio
+async def test_chat_messages_returned_chronological(api_client):
+    """History reload shows the conversation oldest→newest, and a page limit
+    returns the NEWEST messages (tail-first), not the oldest."""
+    res = await api_client.post(
+        "/api/chat/sessions", json={"title": "order", "tool_id": "chat_tool"}
+    )
+    session_id = res.json()["data"]["session"]["id"]
+    for text in ("first", "second", "third", "fourth", "fifth"):
+        await api_client.post(
+            f"/api/chat/sessions/{session_id}/messages",
+            json={"content": text, "role": "user"},
+        )
+
+    res = await api_client.get(f"/api/chat/sessions/{session_id}/messages")
+    messages = res.json()["data"]["messages"]
+    assert [m["content"] for m in messages] == [
+        "first", "second", "third", "fourth", "fifth",
+    ]
+
+    # A page smaller than the conversation returns the tail, not the head.
+    res = await api_client.get(f"/api/chat/sessions/{session_id}/messages?limit=2")
+    assert [m["content"] for m in res.json()["data"]["messages"]] == [
+        "fourth", "fifth",
+    ]
+
+
+@pytest.mark.asyncio
 async def test_rate_limit_429(api_client, monkeypatch):
     monkeypatch.setattr(settings, "rate_limit_enabled", True)
     monkeypatch.setattr(settings, "rate_limit_per_minute", 3)

@@ -82,8 +82,9 @@ async def test_delete_session_cascades_messages(db):
 
 
 @pytest.mark.asyncio
-async def test_context_messages_returns_newest(db):
-    """A session longer than the fetch limit feeds the model the newest rows."""
+async def test_messages_and_context_return_newest(db):
+    """A session longer than the page/limit returns the NEWEST rows — history
+    is read tail-first, so the recent conversation (not the oldest) shows."""
     session = await create_session(db)
     await db.commit()
     for i in range(10):
@@ -93,8 +94,12 @@ async def test_context_messages_returns_newest(db):
     context = await get_context_messages(db, session.id, limit=5)
     # Newest 5, chronological order.
     assert [m.content for m in context] == ["msg-5", "msg-6", "msg-7", "msg-8", "msg-9"]
-    # Contrast with the naive asc fetch, which would return the OLDEST 5.
+    # get_messages (the REST history path) shares the same tail-first contract.
     assert [m.content for m in await get_messages(db, session.id, limit=5)] == [
+        "msg-5", "msg-6", "msg-7", "msg-8", "msg-9",
+    ]
+    # offset counts backward from the newest: skip 5 → the previous page.
+    assert [m.content for m in await get_messages(db, session.id, limit=5, offset=5)] == [
         "msg-0", "msg-1", "msg-2", "msg-3", "msg-4",
     ]
 

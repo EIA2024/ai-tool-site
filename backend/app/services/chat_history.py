@@ -47,32 +47,33 @@ async def add_message(
 async def get_messages(
     db: AsyncSession, session_id: str, limit: int = 200, offset: int = 0
 ) -> list[ChatMessage]:
+    """Return the NEWEST ``limit`` messages in chronological (asc) order.
+
+    ``offset`` counts backward from the newest (0 → the most recent page).
+    Chat history is read tail-first: resuming a session shows the conversation
+    as it was left, and older pages are reached by increasing ``offset``. The
+    naive asc fetch would return the OLDEST rows, hiding the recent
+    conversation entirely once a session grows past ``limit``. ``created_at``
+    ties (same-second messages) get a deterministic secondary sort on ``id``.
+    """
     result = await db.execute(
         select(ChatMessage)
         .where(ChatMessage.session_id == session_id)
-        .order_by(ChatMessage.created_at.asc())
+        .order_by(ChatMessage.created_at.desc(), ChatMessage.id.desc())
         .offset(offset)
         .limit(limit)
     )
-    return list(result.scalars().all())
+    return list(reversed(result.scalars().all()))
 
 
 async def get_context_messages(
     db: AsyncSession, session_id: str, limit: int = 200
 ) -> list[ChatMessage]:
-    """Return the NEWEST ``limit`` messages in chronological (asc) order.
+    """Return the NEWEST ``limit`` messages in chronological order.
 
-    The naive ``get_messages(limit=limit)`` pulls the *oldest* rows, so a
-    session longer than ``limit`` would feed the model stale context. Fetch
-    descending (newest first) then reverse to keep the asc contract.
+    Thin alias over :func:`get_messages` for the model-context call site.
     """
-    result = await db.execute(
-        select(ChatMessage)
-        .where(ChatMessage.session_id == session_id)
-        .order_by(ChatMessage.created_at.desc())
-        .limit(limit)
-    )
-    return list(reversed(result.scalars().all()))
+    return await get_messages(db, session_id, limit=limit)
 
 
 async def get_recent_sessions(
