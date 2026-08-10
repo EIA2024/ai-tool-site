@@ -58,14 +58,24 @@ async def _allow_via_memory(key: str, limit: int) -> bool:
     now = time.monotonic()
     async with _memory_lock:
         if len(_memory) > _MEMORY_MAX_KEYS:
-            # Evict idle keys first, then the oldest keys (insertion order)
-            # until back under budget. Bounded cost: only runs when over.
+            # Prune back under budget: idle keys first (cheap), then the
+            # least-recently-active keys. Evict only what is actually over
+            # budget — a negative overflow after idle-eviction must not slice
+            # from the end of the store, which keeps only the newest keys and
+            # wipes nearly everything else.
+            overflow = len(_memory) - _MEMORY_MAX_KEYS
             idle = [k for k in _memory if not _memory[k]]
-            for k in idle:
+            for k in idle[:overflow]:
                 del _memory[k]
             overflow = len(_memory) - _MEMORY_MAX_KEYS
-            for k in list(_memory)[:overflow]:
-                del _memory[k]
+            if overflow > 0:
+                # The leftmost deque entry is the oldest hit in the window, so
+                # sort by it to evict the least-recently-active keys.
+                by_age = sorted(
+                    _memory.items(), key=lambda kv: kv[1][0] if kv[1] else 0.0
+                )
+                for k, _ in by_age[:overflow]:
+                    del _memory[k]
 
         dq = _memory[key]
         while dq and now - dq[0] >= _WINDOW_SECONDS:

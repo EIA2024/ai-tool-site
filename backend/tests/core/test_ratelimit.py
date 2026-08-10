@@ -5,6 +5,8 @@ These touch module-global state, so each test snapshots and restores
 into the API tests.
 """
 
+from collections import deque
+
 import pytest
 
 from app.core import ratelimit
@@ -52,6 +54,31 @@ async def test_memory_prunes_when_over_budget(monkeypatch):
     await ratelimit._allow_via_memory("new-key", limit=1)
     assert len(ratelimit._memory) <= ratelimit._MEMORY_MAX_KEYS + 1
     assert "new-key" in ratelimit._memory
+
+
+@pytest.mark.asyncio
+async def test_memory_prune_negative_overflow_preserves_live_keys(monkeypatch):
+    """Idle-eviction landing just under the cap must not wipe the live store.
+
+    The old ``list(_memory)[:overflow]`` with a *negative* overflow sliced
+    from the end — keeping only the newest keys. E.g. 11 keys where idle
+    eviction drops 3, overflow = 11-3-10 = -2, and the slice kept only the
+    last 2 keys, destroying 6 live buckets.
+    """
+    monkeypatch.setattr(ratelimit, "_MEMORY_MAX_KEYS", 10)
+    for i in range(8):
+        assert await ratelimit._allow_via_memory(f"live{i}", limit=1) is True
+    for i in range(3):
+        ratelimit._memory[f"idle{i}"] = deque()  # empty deque = idle key
+    assert len(ratelimit._memory) == 11  # over the cap
+
+    await ratelimit._allow_via_memory("new-key", limit=1)
+
+    # Every live bucket survives; only idle keys were pruned.
+    for i in range(8):
+        assert f"live{i}" in ratelimit._memory
+    assert "new-key" in ratelimit._memory
+    assert len(ratelimit._memory) <= ratelimit._MEMORY_MAX_KEYS + 1
 
 
 @pytest.mark.asyncio
