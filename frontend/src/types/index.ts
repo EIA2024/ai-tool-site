@@ -21,6 +21,10 @@ export interface WsMessage {
   timestamp?: string;
   /** Present on the server's "connected" frame — carries the DB session id. */
   session_id?: string;
+  /** Present on the server's "connected" frame — selectable model ids. */
+  models?: string[];
+  /** Present on the server's "connected" frame — the default model. */
+  default_model?: string;
   /** Present on the server's "error" frames — human-readable reason. */
   message?: string;
 }

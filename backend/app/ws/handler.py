@@ -128,15 +128,26 @@ async def chat_websocket(
             return
 
     await websocket.send_text(
-        json.dumps({"type": "connected", "session_id": session.id})
+        json.dumps(
+            {
+                "type": "connected",
+                "session_id": session.id,
+                # Advertise the model choice so the client can render a picker
+                # without a separate config fetch.
+                "models": settings.deepseek_models_list,
+                "default_model": settings.deepseek_default_model,
+            }
+        )
     )
 
     try:
         while True:
             data = await websocket.receive_text()
+            model = ""
             try:
                 msg = json.loads(data)
                 content = str(msg.get("content", ""))
+                model = str(msg.get("model") or "").strip()
             except (json.JSONDecodeError, TypeError):
                 content = data
             content = content.strip()
@@ -150,6 +161,22 @@ async def chat_websocket(
                 await websocket.send_text(
                     json.dumps(
                         {"type": "error", "message": f"content exceeds {_MAX_CONTENT} chars"}
+                    )
+                )
+                continue
+
+            # A per-message model override must be one of the configured models;
+            # anything else is rejected before the (paid, rate-limited) call.
+            if model and model not in settings.deepseek_models_list:
+                await websocket.send_text(
+                    json.dumps(
+                        {
+                            "type": "error",
+                            "message": (
+                                f"不支持的模型 '{model}'。可选："
+                                f"{', '.join(settings.deepseek_models_list)}"
+                            ),
+                        }
                     )
                 )
                 continue
@@ -195,7 +222,7 @@ async def chat_websocket(
             reply = ""
             stream = chat_completion_stream(
                 [{"role": "system", "content": _SYSTEM_PROMPT}] + context,
-                settings.deepseek_default_model,
+                model or settings.deepseek_default_model,
             )
             try:
                 async for delta in stream:

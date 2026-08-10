@@ -14,6 +14,7 @@ import pytest
 from fastapi import WebSocketDisconnect
 from sqlalchemy import select
 
+from app.core.config import settings
 from app.models.chat import ChatMessage
 from app.services.deepseek import DeepSeekError
 from app.ws.handler import chat_websocket
@@ -99,6 +100,69 @@ async def test_ws_ai_reply_flow(db, monkeypatch):
     reply = ws.sent[4]
     assert reply["sender"] == "assistant"
     assert reply["content"] == "你好，我是 AI 助手"
+
+
+@pytest.mark.asyncio
+async def test_ws_honors_model_override(db, monkeypatch):
+    """A per-message model override reaches the model call."""
+    captured = {}
+
+    async def _stub(messages, model, **kwargs):
+        captured["model"] = model
+        yield "ok"
+
+    monkeypatch.setattr(settings, "deepseek_models", "alpha,beta")
+    monkeypatch.setattr("app.ws.handler.chat_completion_stream", _stub)
+    ws = FakeWebSocket(
+        [{"type": "message", "content": "hi", "model": "alpha"}]
+    )
+    await chat_websocket(ws, db)
+
+    assert captured["model"] == "alpha"
+    assert ws.closed is None
+
+
+@pytest.mark.asyncio
+async def test_ws_rejects_unknown_model(db, monkeypatch):
+    """A model outside the configured list is rejected with an error frame and
+    the model is never called (no paid spend, socket stays alive)."""
+    calls = {"n": 0}
+
+    async def _stub(messages, model, **kwargs):
+        calls["n"] += 1
+        yield "ok"
+
+    monkeypatch.setattr(settings, "deepseek_models", "alpha,beta")
+    monkeypatch.setattr("app.ws.handler.chat_completion_stream", _stub)
+    ws = FakeWebSocket(
+        [{"type": "message", "content": "hi", "model": "not-a-real-model"}]
+    )
+    await chat_websocket(ws, db)
+
+    assert calls["n"] == 0
+    types = [f["type"] for f in ws.sent]
+    assert types.count("error") == 1
+    assert "不支持的模型" in ws.sent[-1]["message"]
+    assert ws.closed is None
+
+
+@pytest.mark.asyncio
+async def test_ws_default_model_when_absent(db, monkeypatch):
+    """Without a model override, the configured default is used."""
+    captured = {}
+
+    async def _stub(messages, model, **kwargs):
+        captured["model"] = model
+        yield "ok"
+
+    monkeypatch.setattr(settings, "deepseek_models", "alpha,beta")
+    monkeypatch.setattr(settings, "deepseek_default_model", "beta")
+    monkeypatch.setattr("app.ws.handler.chat_completion_stream", _stub)
+    ws = FakeWebSocket([_user_message("hi")])
+    await chat_websocket(ws, db)
+
+    assert captured["model"] == "beta"
+    assert ws.closed is None
 
 
 @pytest.mark.asyncio

@@ -65,9 +65,15 @@ export class WsClient {
     };
   }
 
-  send(content: string) {
+  send(content: string, model?: string) {
     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-      this.ws.send(JSON.stringify({ type: "message", content }));
+      this.ws.send(
+        JSON.stringify({
+          type: "message",
+          content,
+          ...(model ? { model } : {}),
+        })
+      );
     }
   }
 

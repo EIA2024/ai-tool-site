@@ -23,6 +23,10 @@ export default function ChatToolPage() {
   const [sessions, setSessions] = useState<ChatSession[]>([]);
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [loadingSessions, setLoadingSessions] = useState(true);
+  // Model choice for the chat; populated from the server's "connected" frame
+  // (which advertises the configured models + default), so no config fetch.
+  const [models, setModels] = useState<string[]>([]);
+  const [selectedModel, setSelectedModel] = useState("");
   const clientRef = useRef<WsClient | null>(null);
   // Incremented on every session switch; stale async responses (history
   // fetches from a previous session resolving after the user clicked another)
@@ -114,6 +118,8 @@ export default function ChatToolPage() {
             // Fresh handshake — any half-streamed reply from the previous
             // connection is done; start clean.
             streamingRef.current = null;
+            if (msg.models && Array.isArray(msg.models)) setModels(msg.models);
+            if (msg.default_model) setSelectedModel(msg.default_model);
             if (!msg.session_id) return;
             const sid = msg.session_id;
             setActiveSessionId(sid);
@@ -261,7 +267,7 @@ export default function ChatToolPage() {
         localId: `local-${localCounter++}`,
       },
     ]);
-    clientRef.current?.send(content);
+    clientRef.current?.send(content, selectedModel || undefined);
   };
 
   return (
@@ -273,6 +279,20 @@ export default function ChatToolPage() {
         <button onClick={handleNewSession} disabled={status === "connected" && !activeSessionId}>
           New Chat
         </button>
+        {models.length > 0 && (
+          <select
+            className="chat-model-select"
+            value={selectedModel}
+            onChange={(e) => setSelectedModel(e.target.value)}
+            aria-label="Model"
+          >
+            {models.map((m) => (
+              <option key={m} value={m}>
+                {m}
+              </option>
+            ))}
+          </select>
+        )}
         <span className={`ws-status status-${status}`}>{status}</span>
       </div>
 
