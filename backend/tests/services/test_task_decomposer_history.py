@@ -11,6 +11,7 @@ from app.services.task_decomposer_history import (
     delete_history,
     get_history,
     list_history,
+    prune_history,
 )
 
 
@@ -108,3 +109,53 @@ async def test_delete_history(db):
 
     again = await delete_history(db, created.id)
     assert again is False
+
+
+@pytest.mark.asyncio
+async def test_prune_history_caps_table(db):
+    """History retention mirrors the audit log: oldest rows pruned, newest kept."""
+    from datetime import timedelta
+
+    from app.models.base import utcnow
+
+    base = utcnow()
+    for i in range(5):
+        rec = await create_history(
+            db,
+            raw_task=f"task {i}",
+            context="",
+            task_type="feature",
+            model_name="m1",
+            risk_hints=None,
+            risk_level="low",
+            structured_output={"goal": "g"},
+        )
+        # task 0 oldest … task 4 newest, so the surviving set is deterministic.
+        rec.created_at = base - timedelta(hours=5 - i)
+    await db.commit()
+
+    deleted = await prune_history(db, max_count=3)
+    await db.commit()
+
+    assert deleted == 2
+    remaining = await list_history(db, limit=10)
+    assert sorted(r.raw_task for r in remaining) == ["task 2", "task 3", "task 4"]
+
+
+@pytest.mark.asyncio
+async def test_prune_history_under_cap_is_noop(db):
+    await create_history(
+        db,
+        raw_task="only",
+        context="",
+        task_type="feature",
+        model_name="m1",
+        risk_hints=None,
+        risk_level="low",
+        structured_output={"goal": "g"},
+    )
+    await db.commit()
+
+    # Over-cap prunes nothing; a disabled cap (0) also prunes nothing.
+    assert await prune_history(db, max_count=10) == 0
+    assert await prune_history(db, max_count=0) == 0

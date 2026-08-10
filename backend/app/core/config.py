@@ -45,6 +45,11 @@ class Settings(BaseSettings):
     # without bound. Set to 0 to keep every record (not recommended).
     audit_max_records: int = 50_000
 
+    # Task Decomposer history retention: prune the oldest analyses once the
+    # table exceeds this count. Same rationale as audit_max_records. Set to 0
+    # to keep every record (not recommended).
+    task_decomposer_history_max_records: int = 500
+
     # Security / rate limiting
     rate_limit_enabled: bool = True
     rate_limit_per_minute: int = 20

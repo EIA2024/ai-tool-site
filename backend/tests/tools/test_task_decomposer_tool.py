@@ -141,6 +141,44 @@ async def test_analyze_task_no_api_key(db, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_analyze_task_prunes_history(db, monkeypatch):
+    """History retention runs on analyze so the table stays bounded."""
+    from app.core.config import settings
+    from app.services.task_decomposer_history import count_history, create_history
+
+    monkeypatch.setattr(settings, "task_decomposer_history_max_records", 3)
+    monkeypatch.setattr(
+        "app.services.deepseek.settings.deepseek_api_key", "sk-x"
+    )
+    monkeypatch.setattr(
+        "app.tools.modules.task_decomposer.analyze_with_deepseek", _fake_analyze
+    )
+
+    for i in range(3):
+        await create_history(
+            db,
+            raw_task=f"seed {i}",
+            context="",
+            task_type="feature",
+            model_name="m",
+            risk_hints=None,
+            risk_level="low",
+            structured_output={"goal": "g"},
+        )
+    await db.commit()
+    assert await count_history(db) == 3
+
+    await tool.handle_invoke(
+        {"action": "analyze_task", "raw_task": "new task", "model": "deepseek-v4-flash"},
+        db,
+    )
+    await db.commit()
+
+    # The new insert + prune keeps history at the cap, not at cap + 1.
+    assert await count_history(db) == 3
+
+
+@pytest.mark.asyncio
 async def test_list_history_empty(db):
     result = await tool.handle_invoke({"action": "list_history"}, db)
     assert result["records"] == []

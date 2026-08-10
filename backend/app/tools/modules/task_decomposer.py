@@ -19,6 +19,7 @@ from app.services.task_decomposer_history import (
     delete_history,
     get_history,
     list_history,
+    prune_history,
 )
 from app.tools.base import BaseTool
 from app.tools.modules.task_decomposer_client import (
@@ -113,6 +114,8 @@ class TaskDecomposerTool(BaseTool):
                 risk_level=analysis.risk_level,
                 structured_output=analysis.model_dump(),
             )
+            # Keep the history table bounded like the audit log / chat messages.
+            await prune_history(db, settings.task_decomposer_history_max_records)
         except Exception as exc:
             logger.warning("Failed to save analysis history: %s", exc)
             await db.rollback()
