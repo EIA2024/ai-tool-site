@@ -205,6 +205,10 @@ export default function ChatToolPage() {
                 { ...msg, localId: `ws-${localCounter++}` },
               ]);
             }
+            // The reply just landed; the server may have auto-titled this
+            // session from its first message, so refresh the sidebar list
+            // (otherwise it stays on the placeholder until a reload).
+            refreshSessions();
           }
         },
         handleStatus
@@ -212,7 +216,7 @@ export default function ChatToolPage() {
       clientRef.current = client;
       client.connect(sessionId);
     },
-    [handleStatus]
+    [handleStatus, refreshSessions]
   );
 
   const handleNewSession = async () => {
