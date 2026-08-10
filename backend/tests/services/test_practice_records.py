@@ -8,6 +8,7 @@ from app.services.practice_records import (
     delete_record,
     get_by_hash,
     get_record,
+    import_records,
     list_records,
 )
 
@@ -79,3 +80,79 @@ async def test_delete(db):
     assert await delete_record(db, record.id) is True
     assert await delete_record(db, record.id) is False
     assert await get_record(db, record.id) is None
+
+
+def _rec(stage, user, agent="o", feedback="f", next_steps="n"):
+    return {
+        "stage_key": stage,
+        "user_input": user,
+        "agent_output": agent,
+        "feedback": feedback,
+        "next_steps": next_steps,
+    }
+
+
+@pytest.mark.asyncio
+async def test_import_records_batch_with_interspersed_duplicates(db):
+    """Duplicates (seeded + within-batch) are skipped without losing the rows
+    imported before them — the savepoint isolates each row."""
+    await create_record(db, "s0", "dup-input", "o", "f", "n")
+    await db.commit()
+
+    imported, skipped = await import_records(
+        db,
+        [
+            _rec("s0", "dup-input"),  # duplicate of the seeded row
+            _rec("s1", "u1"),
+            _rec("s2", "u2"),
+            _rec("s1", "u1"),  # duplicate within the batch
+        ],
+    )
+    await db.commit()
+
+    assert imported == 2
+    assert skipped == 2
+    # Seed + s1 + s2 all intact; the pre-existing duplicate did not abort the
+    # transaction before the new rows landed.
+    assert await count_records(db) == 3
+    assert sorted(await list_records(db), key=lambda r: r.stage_key)[0].stage_key == "s0"
+
+
+@pytest.mark.asyncio
+async def test_import_records_dedup_matches_create_record(db):
+    """A record first saved via create_record is skipped on re-import."""
+    await create_record(db, "s", "u", "o", "f", "n")
+    await db.commit()
+
+    imported, skipped = await import_records(db, [_rec("s", "u")])
+    await db.commit()
+
+    assert imported == 0
+    assert skipped == 1
+    assert await count_records(db) == 1
+
+
+@pytest.mark.asyncio
+async def test_import_records_empty_and_coerces(db):
+    imported, skipped = await import_records(db, [])
+    assert (imported, skipped) == (0, 0)
+
+    # Non-string values are coerced exactly like the single-save path.
+    imported, skipped = await import_records(
+        db,
+        [
+            {
+                "stage_key": "s",
+                "user_input": 123,
+                "agent_output": None,
+                "feedback": "",
+                "next_steps": "",
+            }
+        ],
+    )
+    await db.commit()
+
+    assert (imported, skipped) == (1, 0)
+    recs = await list_records(db)
+    assert recs[0].user_input == "123"
+    assert recs[0].agent_output == ""

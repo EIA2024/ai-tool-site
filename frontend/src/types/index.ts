@@ -142,6 +142,11 @@ export interface ListRecordsData {
   records: PracticeRecord[];
 }
 
+export interface ImportRecordsData {
+  imported: number;
+  skipped: number;
+}
+
 /* ── Task Decomposer types ── */
 
 export interface TaskAnalysis {

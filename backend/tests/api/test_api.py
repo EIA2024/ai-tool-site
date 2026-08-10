@@ -105,6 +105,59 @@ async def test_invoke_unknown_tool(api_client):
 
 
 @pytest.mark.asyncio
+async def test_invoke_import_records_batch(api_client):
+    """A batch import is one invoke (one rate-limit slot) and dedups in-place."""
+    res = await api_client.post(
+        "/api/tools/code_agent_flow_viz/invoke",
+        json={
+            "payload": {
+                "action": "import_records",
+                "records": [
+                    {
+                        "stage_key": "s1",
+                        "user_input": "a",
+                        "agent_output": "b",
+                        "feedback": "c",
+                        "next_steps": "d",
+                    },
+                    {
+                        "stage_key": "s1",
+                        "user_input": "a",
+                        "agent_output": "b",
+                        "feedback": "c",
+                        "next_steps": "d",
+                    },  # duplicate
+                    {
+                        "stage_key": "s2",
+                        "user_input": "x",
+                        "agent_output": "y",
+                        "feedback": "z",
+                        "next_steps": "w",
+                    },
+                ],
+            }
+        },
+    )
+    assert res.status_code == 200
+    body = res.json()
+    assert body["success"] is True
+    assert body["data"] == {"imported": 2, "skipped": 1}
+
+
+@pytest.mark.asyncio
+async def test_invoke_import_records_invalid_payload(api_client):
+    """Malformed batch input returns a typed VALIDATION_ERROR, not a 500."""
+    res = await api_client.post(
+        "/api/tools/code_agent_flow_viz/invoke",
+        json={"payload": {"action": "import_records", "records": "not-a-list"}},
+    )
+    assert res.status_code == 200
+    body = res.json()
+    assert body["success"] is False
+    assert body["error"]["code"] == "VALIDATION_ERROR"
+
+
+@pytest.mark.asyncio
 async def test_audit_endpoint_records_invoke(api_client):
     await api_client.post(
         "/api/tools/blank_tool/invoke", json={"payload": {"input": "audit me"}}

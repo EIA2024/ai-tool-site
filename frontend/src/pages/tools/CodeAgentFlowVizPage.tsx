@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { invokeTool } from "../../lib/api";
 import type {
+  ImportRecordsData,
   ListRecordsData,
   PracticeRecord,
   SaveRecordData,
@@ -516,37 +517,31 @@ export default function CodeAgentFlowVizPage() {
     }
 
     setImporting(true);
-    let createdCount = 0;
-    let skippedCount = 0;
-
-    for (const item of imported) {
-      const rec = item as Record<string, unknown>;
-      try {
-        const res = await invokeTool<SaveRecordData>("code_agent_flow_viz", {
-          action: "save_record",
-          stage_key: String(rec.stage_key ?? ""),
-          user_input: String(rec.user_input ?? ""),
-          agent_output: String(rec.agent_output ?? ""),
-          feedback: String(rec.feedback ?? ""),
-          next_steps: String(rec.next_steps ?? ""),
-        });
-        if (res.success && res.data) {
-          const d = res.data;
-          if (d.created) {
-            createdCount++;
-          } else {
-            skippedCount++;
-          }
-        }
-      } catch {
-        // skip individual failures
+    let resultText = "";
+    try {
+      // One batch call instead of one save_record per row: importing N records
+      // as N invokes trips the per-minute rate limit once N passes the cap,
+      // and the old per-row catch silently swallowed those 429 failures —
+      // a data-loss bug. The backend import_records action dedups and returns
+      // imported/skipped counts in a single request.
+      const res = await invokeTool<ImportRecordsData>("code_agent_flow_viz", {
+        action: "import_records",
+        records: imported as Record<string, unknown>[],
+      });
+      if (res.success && res.data) {
+        const d = res.data;
+        resultText = `Imported: ${d.imported} new, ${d.skipped} skipped.`;
+      } else {
+        setError(res.error?.message ?? "Import failed.");
       }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Import failed.");
+    } finally {
+      setImporting(false);
+      if (fileInputRef.current) fileInputRef.current.value = "";
+      await loadRecords();
     }
-
-    setImporting(false);
-    setImportResult(`Imported: ${createdCount} new, ${skippedCount} skipped.`);
-    if (fileInputRef.current) fileInputRef.current.value = "";
-    await loadRecords();
+    if (resultText) setImportResult(resultText);
   };
 
   const toastRef = useRef<HTMLDivElement>(null);
