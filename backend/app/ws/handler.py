@@ -44,6 +44,24 @@ router = APIRouter()
 _MAX_CONTENT = 10000
 _CONTEXT_LIMIT = 20  # most recent stored messages fed to the model as memory
 _MAX_CONTEXT_FETCH = 200  # rows pulled (asc), tail taken — oldest are skipped
+# Cap the combined memory fed to the model. 20 messages at the 10k cap would
+# be ~200k chars (~50k+ tokens) — far past the model context window, turning
+# an honest long chat into a hard model error. Trim to the newest messages
+# that fit this budget instead (the current user message is always kept).
+_CONTEXT_CHAR_BUDGET = 24_000
+
+
+def _trim_context(context: list[dict], budget: int = _CONTEXT_CHAR_BUDGET) -> list[dict]:
+    """Keep the newest messages whose combined length fits ``budget`` chars."""
+    kept: list[dict] = []
+    used = 0
+    for message in reversed(context):
+        cost = len(message["content"]) + 32  # rough per-message overhead
+        if used + cost > budget and kept:
+            break
+        kept.append(message)
+        used += cost
+    return list(reversed(kept))
 
 _SYSTEM_PROMPT = (
     "你是一个友好的 AI 助手，运行在用户的 AI 工具站里，通过 WebSocket 聊天。"
@@ -65,11 +83,20 @@ def _origin_allowed(websocket: WebSocket) -> bool:
 
 
 def _client_ip(websocket: WebSocket) -> str:
-    """Client address for rate limiting; best-effort like the REST layer.
+    """Client address for rate limiting; mirrors the REST layer's rule.
 
-    ``websocket.client`` is ``(host, port)`` on a live socket but may be
-    absent in tests/doubles, so look it up defensively.
+    ``X-Forwarded-For`` is only trusted when running behind a reverse proxy
+    (``TRUST_PROXY_HEADERS=true``); otherwise a client could spoof the header
+    to rotate identities and bypass per-IP rate limiting. ``websocket.client``
+    is ``(host, port)`` on a live socket but may be absent in tests/doubles,
+    so look it up defensively.
     """
+    if settings.trust_proxy_headers:
+        forwarded = websocket.headers.get("x-forwarded-for")
+        if forwarded:
+            first = forwarded.split(",")[0].strip()
+            if first:
+                return first
     client = getattr(websocket, "client", None)
     return client.host if client else "unknown"
 
@@ -150,6 +177,7 @@ async def chat_websocket(
                 {"role": _map_role(m.role), "content": m.content}
                 for m in history[-_CONTEXT_LIMIT:]
             ]
+            context = _trim_context(context)
             context.append({"role": "user", "content": content})
 
             # Persist the user message (best-effort).

@@ -59,6 +59,14 @@ _MAX_BODY_BYTES = 1_000_000
 
 @app.middleware("http")
 async def limit_body_size(request: Request, call_next):
+    # A client can only send a request body without Content-Length via
+    # Transfer-Encoding: chunked (HTTP/1.1). Reject chunked outright —
+    # every legitimate client of this API sends JSON with a Content-Length —
+    # because Starlette buffers the decoded body with no size bound, so a
+    # multi-MB chunked body would otherwise slip past the cap below and be
+    # buffered fully in memory.
+    if request.headers.get("transfer-encoding"):
+        return JSONResponse(status_code=413, content={"detail": "request body too large"})
     length = request.headers.get("content-length")
     if length and length.isdigit() and int(length) > _MAX_BODY_BYTES:
         return JSONResponse(status_code=413, content={"detail": "request body too large"})

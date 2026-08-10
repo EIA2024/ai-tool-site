@@ -275,6 +275,18 @@ async def test_request_body_size_capped(api_client):
 
 
 @pytest.mark.asyncio
+async def test_request_body_chunked_rejected(api_client):
+    """A chunked body has no Content-Length, so the header cap alone would be
+    bypassed — the middleware must reject Transfer-Encoding outright."""
+    res = await api_client.post(
+        "/api/tools/blank_tool/invoke",
+        content=b'{"payload":{"input":"x"}}',
+        headers={"transfer-encoding": "chunked", "content-type": "application/json"},
+    )
+    assert res.status_code == 413
+
+
+@pytest.mark.asyncio
 async def test_client_ip_respects_proxy_trust_setting(monkeypatch):
     fake = SimpleNamespace(
         headers={"x-forwarded-for": "9.9.9.9"}, client=SimpleNamespace(host="1.1.1.1")

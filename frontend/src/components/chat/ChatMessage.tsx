@@ -5,9 +5,13 @@ interface Props {
 }
 
 export default function ChatMessage({ message }: Props) {
+  // Server error frames are converted to system bubbles before this point,
+  // but stay defensive: never render "undefined:" for a malformed frame.
+  const sender = message.sender || "系统";
+  const content = message.content || message.message || "";
   return (
-    <div className={`chat-message message-${message.sender}`}>
-      <strong>{message.sender}:</strong> {message.content}
+    <div className={`chat-message message-${sender}`}>
+      <strong>{sender}:</strong> {content}
     </div>
   );
 }

@@ -24,6 +24,10 @@ export default function ChatToolPage() {
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [loadingSessions, setLoadingSessions] = useState(true);
   const clientRef = useRef<WsClient | null>(null);
+  // Incremented on every session switch; stale async responses (history
+  // fetches from a previous session resolving after the user clicked another)
+  // check it and drop themselves.
+  const historyTokenRef = useRef(0);
 
   const refreshSessions = useCallback(async () => {
     try {
@@ -45,7 +49,9 @@ export default function ChatToolPage() {
   }, [refreshSessions]);
 
   const loadHistory = useCallback(async (sessionId: string) => {
+    const token = ++historyTokenRef.current;
     const res = await get<ChatMessagesData>(`/chat/sessions/${sessionId}/messages`);
+    if (token !== historyTokenRef.current) return; // a newer switch won — drop stale data
     if (res.success && res.data) {
       setMessages(
         res.data.messages.map((m) => ({
@@ -59,6 +65,15 @@ export default function ChatToolPage() {
     } else {
       setMessages([]);
     }
+  }, []);
+
+  const handleStatus = useCallback((s: string) => {
+    // A reply was in flight when the socket dropped — clear the typing dots
+    // or they'd spin forever until the next "message" frame.
+    if (s === "disconnected" || s.startsWith("reconnecting")) {
+      setTyping(false);
+    }
+    setStatus(s);
   }, []);
 
   const connectTo = useCallback(
@@ -88,25 +103,41 @@ export default function ChatToolPage() {
             );
             return;
           }
-          // Non-terminal signals — not messages, don't render as bubbles.
           if (msg.type === "typing") {
             setTyping(true);
             return;
           }
+          // Error frames (empty content, too long, rate-limited) have no
+          // sender/content — surface them as a clear system bubble rather
+          // than a malformed "undefined:" one.
+          if (msg.type === "error") {
+            setTyping(false);
+            setMessages((prev) => [
+              ...prev,
+              {
+                type: "message",
+                content: msg.message || "发生错误",
+                sender: "系统",
+                timestamp: new Date().toISOString(),
+                localId: `sys-${localCounter++}`,
+              },
+            ]);
+            return;
+          }
           if (msg.type === "message") {
             setTyping(false);
+            setMessages((prev) => [
+              ...prev,
+              { ...msg, localId: `ws-${localCounter++}` },
+            ]);
           }
-          setMessages((prev) => [
-            ...prev,
-            { ...msg, localId: `ws-${localCounter++}` },
-          ]);
         },
-        setStatus
+        handleStatus
       );
       clientRef.current = client;
       client.connect(sessionId);
     },
-    []
+    [handleStatus]
   );
 
   const handleNewSession = async () => {

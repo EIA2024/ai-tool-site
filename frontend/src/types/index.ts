@@ -14,11 +14,15 @@ export interface ApiResponse<T = unknown> {
 
 export interface WsMessage {
   type: string;
-  content: string;
-  sender: string;
-  timestamp: string;
+  /** Present on "message" frames — the bubble body. */
+  content?: string;
+  /** Present on "message" frames — the speaker ("user" | "assistant"). */
+  sender?: string;
+  timestamp?: string;
   /** Present on the server's "connected" frame — carries the DB session id. */
   session_id?: string;
+  /** Present on the server's "error" frames — human-readable reason. */
+  message?: string;
 }
 
 /* ── Public runtime config (GET /api/config) ── */

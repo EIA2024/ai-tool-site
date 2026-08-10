@@ -207,6 +207,42 @@ async def test_ws_autotitles_session_from_first_message(db, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_ws_client_ip_honors_proxy_trust(monkeypatch):
+    """The WS rate-limit identity must follow the same trust rule as the REST
+    layer: X-Forwarded-For is only used when TRUST_PROXY_HEADERS is set."""
+    from types import SimpleNamespace
+
+    from app.core.config import settings
+    from app.ws.handler import _client_ip
+
+    fake = SimpleNamespace(
+        headers={"x-forwarded-for": "9.9.9.9"},
+        client=SimpleNamespace(host="1.1.1.1"),
+    )
+    monkeypatch.setattr(settings, "trust_proxy_headers", False)
+    assert _client_ip(fake) == "1.1.1.1"  # spoofed XFF ignored
+
+    monkeypatch.setattr(settings, "trust_proxy_headers", True)
+    assert _client_ip(fake) == "9.9.9.9"  # trusted proxy path used
+
+
+def test_trim_context_bounds_model_memory():
+    """The context fed to the model stays within the char budget, keeping the
+    newest messages — and always at least the most recent one."""
+    from app.ws.handler import _trim_context
+
+    big = {"role": "user", "content": "x" * 1000}
+    tiny = {"role": "user", "content": "y"}
+
+    trimmed = _trim_context([big, big, tiny], budget=1100)
+    assert trimmed == [big, tiny]  # oldest 1k-char message dropped
+
+    # A single message larger than the budget is still kept (never empty).
+    huge = {"role": "user", "content": "z" * 5000}
+    assert _trim_context([huge], budget=1000) == [huge]
+
+
+@pytest.mark.asyncio
 async def test_ws_rate_limited_skips_model_and_keeps_socket(db, monkeypatch):
     """Over-budget messages get an error frame; the model is not called."""
     calls = {"n": 0}
