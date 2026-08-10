@@ -42,9 +42,9 @@ async def test_config(api_client):
     res = await api_client.get("/api/config")
     body = res.json()
     assert body["success"] is True
-    models = body["data"]["deepseek_models"]
+    models = body["data"]["models"]
     assert isinstance(models, list) and models
-    assert body["data"]["deepseek_default_model"] in models
+    assert body["data"]["default_model"] in models
 
 
 @pytest.mark.asyncio

@@ -1,8 +1,8 @@
-"""DeepSeek integration for the Task Decomposer tool.
+"""Model integration for the Task Decomposer tool.
 
 Handles prompt construction, JSON validation, deterministic agent_prompt
 generation, and a bounded retry for the model's non-deterministic JSON.
-The raw HTTP call lives in the shared ``app.services.deepseek`` client.
+The raw HTTP call lives in the shared ``app.services.llm`` client.
 """
 
 import json
@@ -10,12 +10,7 @@ from typing import Annotated
 
 from pydantic import BaseModel, Field, StringConstraints
 
-from app.services.deepseek import (
-    DeepSeekError as DeepSeekClientError,
-)
-from app.services.deepseek import (
-    chat_completion,
-)
+from app.services.llm import ProviderError, chat_completion
 
 # Each risk hint is short; the per-item cap keeps the prompt (and thus the
 # model spend) bounded even if a client sends many verbose hints.
@@ -147,15 +142,15 @@ def build_agent_prompt(analysis: ModelTaskAnalysis) -> str:
     )
 
 
-# ── DeepSeek API call ──
+# ── Model API call ──
 
 
-async def _call_deepseek_once(input_data: AnalyzeTaskInput) -> ModelTaskAnalysis:
+async def _call_once(input_data: AnalyzeTaskInput) -> ModelTaskAnalysis:
     """Run a single completion and parse the model's JSON into the schema.
 
-    The HTTP call itself lives in the shared DeepSeek client; this function
-    only attaches the tool's prompt and validates the model's JSON against
-    the task-card schema. Raises ``DeepSeekClientError`` on any failure.
+    The HTTP call itself lives in the shared model client; this function only
+    attaches the tool's prompt and validates the model's JSON against the
+    task-card schema. Raises ``ProviderError`` on any failure.
     """
     content = await chat_completion(
         [
@@ -173,22 +168,22 @@ async def _call_deepseek_once(input_data: AnalyzeTaskInput) -> ModelTaskAnalysis
     try:
         return ModelTaskAnalysis.model_validate(json.loads(content))
     except (json.JSONDecodeError, ValueError) as exc:
-        raise DeepSeekClientError(
-            "DeepSeek 返回的 JSON 未通过 schema 校验", retryable=True
+        raise ProviderError(
+            "模型返回的 JSON 未通过 schema 校验", retryable=True
         ) from exc
 
 
-async def analyze_with_deepseek(input_data: AnalyzeTaskInput) -> TaskAnalysis:
+async def analyze_with_llm(input_data: AnalyzeTaskInput) -> TaskAnalysis:
     # LLM JSON output is non-deterministic: one call in a few returns
     # truncated or schema-invalid JSON even with response_format. Retry
     # retryable failures (parse errors, transient transport/5xx) with a
     # fresh completion rather than failing the user on a bad roll. 4xx
     # auth/quota errors are never retried.
-    last_error: DeepSeekClientError | None = None
+    last_error: ProviderError | None = None
     for _attempt in range(3):
         try:
-            model_analysis = await _call_deepseek_once(input_data)
-        except DeepSeekClientError as exc:
+            model_analysis = await _call_once(input_data)
+        except ProviderError as exc:
             if not exc.retryable:
                 raise
             last_error = exc
@@ -198,4 +193,4 @@ async def analyze_with_deepseek(input_data: AnalyzeTaskInput) -> TaskAnalysis:
             agent_prompt=build_agent_prompt(model_analysis),
         )
     # Only reachable when every attempt failed retryably.
-    raise last_error or DeepSeekClientError("DeepSeek 调用多次失败")
+    raise last_error or ProviderError("模型服务调用多次失败")

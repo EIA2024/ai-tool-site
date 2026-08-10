@@ -1,7 +1,7 @@
 """Task Decomposer tool module.
 
 Provides:
-- analyze_task: call DeepSeek to decompose a task, save to history (best-effort)
+- analyze_task: call the configured LLM to decompose a task, save to history (best-effort)
 - list_history: list saved analyses
 - get_history: get a single analysis
 - delete_history: delete an analysis
@@ -14,6 +14,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.errors import NotFoundError, ProviderError, ValidationError
+from app.services.llm import (
+    get_default_model,
+    get_models,
+    is_model_supported,
+)
 from app.services.task_decomposer_history import (
     create_history,
     delete_history,
@@ -24,8 +29,10 @@ from app.services.task_decomposer_history import (
 from app.tools.base import BaseTool
 from app.tools.modules.task_decomposer_client import (
     AnalyzeTaskInput,
-    DeepSeekClientError,
-    analyze_with_deepseek,
+    analyze_with_llm,
+)
+from app.tools.modules.task_decomposer_client import (
+    ProviderError as LlmProviderError,
 )
 
 logger = logging.getLogger(__name__)
@@ -38,15 +45,15 @@ class TaskDecomposerTool(BaseTool):
     name = "Task Decomposer"
     description = (
         "Break down vague development tasks into structured Coding Agent "
-        "task cards using DeepSeek"
+        "task cards using the configured LLM"
     )
     mode = "request-response"
 
     def config(self) -> dict:
         return {
             "supported_actions": list(_SUPPORTED_ACTIONS),
-            "models": settings.deepseek_models_list,
-            "default_model": settings.deepseek_default_model,
+            "models": get_models(),
+            "default_model": get_default_model(),
         }
 
     async def handle_invoke(self, payload: dict, db: AsyncSession) -> dict:
@@ -76,10 +83,10 @@ class TaskDecomposerTool(BaseTool):
         if not raw_task:
             raise ValidationError("请先输入原始任务")
 
-        model = payload.get("model") or settings.deepseek_default_model
-        if model not in settings.deepseek_models_list:
+        model = payload.get("model") or get_default_model()
+        if not is_model_supported(model):
             raise ValidationError(
-                f"不支持的模型 '{model}'。可选：{', '.join(settings.deepseek_models_list)}"
+                f"不支持的模型 '{model}'。可选：{', '.join(get_models())}"
             )
 
         try:
@@ -95,9 +102,9 @@ class TaskDecomposerTool(BaseTool):
             raise ValidationError(f"输入校验失败：{exc}") from exc
 
         try:
-            analysis = await analyze_with_deepseek(input_data)
-        except DeepSeekClientError as exc:
-            raise ProviderError(str(exc), code="DEEPSEEK_ERROR") from exc
+            analysis = await analyze_with_llm(input_data)
+        except LlmProviderError as exc:
+            raise ProviderError(str(exc), code="LLM_ERROR") from exc
 
         # Persist history best-effort: an analysis produced by the model is
         # too expensive to lose because the history insert failed. On failure

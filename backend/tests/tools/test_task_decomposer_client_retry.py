@@ -1,4 +1,4 @@
-"""Retry semantics for analyze_with_deepseek.
+"""Retry semantics for analyze_with_llm.
 
 The model's JSON output is non-deterministic, so a single failed roll should
 not fail the user. These tests pin the retry policy: retryable failures are
@@ -8,11 +8,11 @@ surface immediately, and retries are bounded.
 
 import pytest
 
+from app.services.llm import ProviderError
 from app.tools.modules.task_decomposer_client import (
     AnalyzeTaskInput,
-    DeepSeekClientError,
     ModelTaskAnalysis,
-    analyze_with_deepseek,
+    analyze_with_llm,
 )
 
 _VALID_ANALYSIS = ModelTaskAnalysis(
@@ -42,15 +42,15 @@ async def test_retries_then_succeeds_on_bad_roll(monkeypatch):
     async def flaky(_input_data):
         calls.append(1)
         if len(calls) == 1:
-            raise DeepSeekClientError(
-                "DeepSeek 返回的 JSON 未通过 schema 校验", retryable=True
+            raise ProviderError(
+                "模型返回的 JSON 未通过 schema 校验", retryable=True
             )
         return _VALID_ANALYSIS
 
     monkeypatch.setattr(
-        "app.tools.modules.task_decomposer_client._call_deepseek_once", flaky
+        "app.tools.modules.task_decomposer_client._call_once", flaky
     )
-    result = await analyze_with_deepseek(_INPUT)
+    result = await analyze_with_llm(_INPUT)
     assert result.goal == "goal"
     assert result.agent_prompt
     assert len(calls) == 2
@@ -63,13 +63,13 @@ async def test_non_retryable_failure_raises_immediately(monkeypatch):
 
     async def always_bad(_input_data):
         calls.append(1)
-        raise DeepSeekClientError("DeepSeek API 返回错误：HTTP 401 Unauthorized")
+        raise ProviderError("模型服务返回错误：HTTP 401 Unauthorized")
 
     monkeypatch.setattr(
-        "app.tools.modules.task_decomposer_client._call_deepseek_once", always_bad
+        "app.tools.modules.task_decomposer_client._call_once", always_bad
     )
-    with pytest.raises(DeepSeekClientError, match="401"):
-        await analyze_with_deepseek(_INPUT)
+    with pytest.raises(ProviderError, match="401"):
+        await analyze_with_llm(_INPUT)
     assert len(calls) == 1
 
 
@@ -80,21 +80,21 @@ async def test_retries_are_bounded_after_persistent_failure(monkeypatch):
 
     async def always_bad(_input_data):
         calls.append(1)
-        raise DeepSeekClientError("无法连接 DeepSeek API", retryable=True)
+        raise ProviderError("无法连接模型服务", retryable=True)
 
     monkeypatch.setattr(
-        "app.tools.modules.task_decomposer_client._call_deepseek_once", always_bad
+        "app.tools.modules.task_decomposer_client._call_once", always_bad
     )
-    with pytest.raises(DeepSeekClientError, match="无法连接"):
-        await analyze_with_deepseek(_INPUT)
+    with pytest.raises(ProviderError, match="无法连接"):
+        await analyze_with_llm(_INPUT)
     assert len(calls) == 3
 
 
 @pytest.mark.asyncio
 async def test_5xx_is_retryable(monkeypatch):
     """Server-side errors carry retryable=True so the loop will retry them."""
-    err = DeepSeekClientError(
-        "DeepSeek API 返回错误：HTTP 503 Service Unavailable", retryable=True
+    err = ProviderError(
+        "模型服务返回错误：HTTP 503 Service Unavailable", retryable=True
     )
     calls = []
 
@@ -105,8 +105,8 @@ async def test_5xx_is_retryable(monkeypatch):
         return _VALID_ANALYSIS
 
     monkeypatch.setattr(
-        "app.tools.modules.task_decomposer_client._call_deepseek_once", fail_then_succeed
+        "app.tools.modules.task_decomposer_client._call_once", fail_then_succeed
     )
-    result = await analyze_with_deepseek(_INPUT)
+    result = await analyze_with_llm(_INPUT)
     assert result.goal == "goal"
     assert len(calls) == 2

@@ -16,7 +16,7 @@ from sqlalchemy import select
 
 from app.core.config import settings
 from app.models.chat import ChatMessage
-from app.services.deepseek import DeepSeekError
+from app.services.llm import ProviderError
 from app.ws.handler import chat_websocket
 
 
@@ -50,6 +50,31 @@ class FakeWebSocket:
 
 def _user_message(content: str) -> dict:
     return {"type": "message", "content": content}
+
+
+def _install_model_registry(monkeypatch, models, default):
+    """Swap the provider registry so the handler's model checks see a custom
+    set. Exercises the real registry path (``is_model_supported`` /
+    ``get_default_model``) instead of mocking those functions. The provider id
+    stays "deepseek" so ``llm_default_provider`` keeps resolving."""
+    monkeypatch.setattr(
+        settings,
+        "llm_providers",
+        json.dumps(
+            [
+                {
+                    "id": "deepseek",
+                    "name": "Test",
+                    "base_url": "https://test.local",
+                    "api_key_env": "deepseek_api_key",
+                    "models": models,
+                    "default_model": default,
+                    "supports_thinking": True,
+                }
+            ],
+            ensure_ascii=False,
+        ),
+    )
 
 
 @pytest.fixture(autouse=True)
@@ -111,7 +136,7 @@ async def test_ws_honors_model_override(db, monkeypatch):
         captured["model"] = model
         yield "ok"
 
-    monkeypatch.setattr(settings, "deepseek_models", "alpha,beta")
+    _install_model_registry(monkeypatch, ["alpha", "beta"], "alpha")
     monkeypatch.setattr("app.ws.handler.chat_completion_stream", _stub)
     ws = FakeWebSocket(
         [{"type": "message", "content": "hi", "model": "alpha"}]
@@ -132,7 +157,7 @@ async def test_ws_rejects_unknown_model(db, monkeypatch):
         calls["n"] += 1
         yield "ok"
 
-    monkeypatch.setattr(settings, "deepseek_models", "alpha,beta")
+    _install_model_registry(monkeypatch, ["alpha", "beta"], "alpha")
     monkeypatch.setattr("app.ws.handler.chat_completion_stream", _stub)
     ws = FakeWebSocket(
         [{"type": "message", "content": "hi", "model": "not-a-real-model"}]
@@ -155,8 +180,7 @@ async def test_ws_default_model_when_absent(db, monkeypatch):
         captured["model"] = model
         yield "ok"
 
-    monkeypatch.setattr(settings, "deepseek_models", "alpha,beta")
-    monkeypatch.setattr(settings, "deepseek_default_model", "beta")
+    _install_model_registry(monkeypatch, ["alpha", "beta"], "beta")
     monkeypatch.setattr("app.ws.handler.chat_completion_stream", _stub)
     ws = FakeWebSocket([_user_message("hi")])
     await chat_websocket(ws, db)
@@ -187,11 +211,11 @@ async def test_ws_conversation_memory_in_context(db, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_ws_surfaces_ai_failure_and_keeps_socket(db, monkeypatch):
-    """A DeepSeek failure sends an honest assistant message, socket stays alive."""
+    """A model failure sends an honest assistant message, socket stays alive."""
     async def _fail(messages, model, **kwargs):
         # Raised on the first iteration of the async generator — the handler
-        # catches DeepSeekError and keeps the socket alive.
-        raise DeepSeekError("无法连接 DeepSeek API", retryable=True)
+        # catches ProviderError and keeps the socket alive.
+        raise ProviderError("无法连接模型服务", retryable=True)
         yield  # unreachable — makes this an async generator
 
     monkeypatch.setattr("app.ws.handler.chat_completion_stream", _fail)
@@ -267,8 +291,8 @@ async def test_ws_reasoning_truncation_surfaces_honest_message(db, monkeypatch):
     """A reasoning-truncated reply (budget exhausted while the model thinks)
     reaches the user as an honest message rather than a bare failure."""
     async def _truncated(messages, model, **kwargs):
-        raise DeepSeekError(
-            "DeepSeek 模型思考过久，答案生成前已用尽 token 预算。请缩小请求范围后重试。",
+        raise ProviderError(
+            "模型思考过久，答案生成前已用尽 token 预算。请缩小请求范围后重试。",
             retryable=True,
         )
         yield  # unreachable — makes this an async generator

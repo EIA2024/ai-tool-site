@@ -32,8 +32,8 @@ export interface WsMessage {
 /* ── Public runtime config (GET /api/config) ── */
 
 export interface PublicConfig {
-  deepseek_models: string[];
-  deepseek_default_model: string;
+  models: string[];
+  default_model: string;
 }
 
 /* ── Audit / usage ── */

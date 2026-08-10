@@ -3,9 +3,9 @@ from fastapi import APIRouter
 from app.api.routes.audit import router as audit_router
 from app.api.routes.chat import router as chat_router
 from app.api.routes.tools import router as tools_router
-from app.core.config import settings
 from app.core.errors import ok
 from app.schemas import ApiResponse
+from app.services.llm import get_default_model, get_models
 
 router = APIRouter()
 
@@ -28,7 +28,7 @@ async def public_config():
     """
     return ok(
         {
-            "deepseek_models": settings.deepseek_models_list,
-            "deepseek_default_model": settings.deepseek_default_model,
+            "models": get_models(),
+            "default_model": get_default_model(),
         }
     )

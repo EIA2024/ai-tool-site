@@ -499,23 +499,23 @@ unexpected close; call `disconnect()` on unmount to stop it.
 
 ## 7. AI API Integration Guide
 
-The project uses the **DeepSeek API**. Configuration lives in
-`backend/app/core/config.py` (`deepseek_api_key`, `deepseek_models`,
-`deepseek_default_model`). A complete, production-shaped reference is the
-[Task Decomposer](backend/app/tools/modules/task_decomposer.py) tool: prompt
-building and the API call live in a self-contained client module
-(`task_decomposer_client.py`), failures are wrapped as `ProviderError`, and
-the response is validated with Pydantic.
+The project talks to models through a **provider abstraction layer**
+(`backend/app/services/llm.py`). Providers are config-driven: the default is
+DeepSeek, and adding another OpenAI-compatible provider (OpenAI, GLM, Moonshot,
+Kimi, Qwen, ...) is one `LLM_PROVIDERS` entry plus one Settings field for its
+API key — no client code (see "Adding a model provider" below). New tools call
+`chat_completion` (request-response) or `chat_completion_stream` (WebSocket)
+instead of talking to httpx directly. A complete, production-shaped reference
+is the [Task Decomposer](backend/app/tools/modules/task_decomposer.py) tool:
+prompt building lives in `task_decomposer_client.py`, upstream failures are
+caught as `ProviderError` and re-wrapped as the HTTP-layer error type, and the
+response is validated with Pydantic.
 
 ### Pattern: Direct API Call (Request-Response)
 
 ```python
-import httpx
-
-from app.core.config import settings
-from app.core.errors import ProviderError, ValidationError
-
-DEEPSEEK_URL = "https://api.deepseek.com/chat/completions"
+from app.core.errors import ProviderError as HttpProviderError, ValidationError
+from app.services.llm import ProviderError as LlmProviderError, chat_completion, get_default_model
 
 
 class SummarizerTool(BaseTool):
@@ -529,48 +529,36 @@ class SummarizerTool(BaseTool):
         if not text:
             raise ValidationError("text is required", code="EMPTY_TEXT")
 
-        body = {
-            "model": payload.get("model") or settings.deepseek_default_model,
-            "messages": [
-                {"role": "system", "content": "Summarize the following text."},
-                {"role": "user", "content": text},
-            ],
-            "response_format": {"type": "json_object"},
-            "temperature": 0.2,
-            "max_tokens": 2200,
-        }
-        headers = {
-            "Authorization": f"Bearer {settings.deepseek_api_key}",
-            "Content-Type": "application/json",
-        }
+        model = payload.get("model") or get_default_model()
 
         try:
-            async with httpx.AsyncClient(timeout=60) as client:
-                response = await client.post(DEEPSEEK_URL, headers=headers, json=body)
-        except httpx.HTTPError as exc:
-            raise ProviderError("无法连接 DeepSeek API", code="DEEPSEEK_ERROR") from exc
-
-        if response.status_code >= 400:
-            raise ProviderError(
-                f"DeepSeek API 返回错误：HTTP {response.status_code}",
-                code="DEEPSEEK_ERROR",
+            summary = await chat_completion(
+                [
+                    {"role": "system", "content": "Summarize the following text."},
+                    {"role": "user", "content": text},
+                ],
+                model,
+                response_format={"type": "json_object"},
+                temperature=0.2,
+                max_tokens=2200,
             )
+        except LlmProviderError as exc:
+            # Re-raise as the HTTP-layer ProviderError so the router wraps it
+            # in the standard envelope.
+            raise HttpProviderError(str(exc), code="LLM_ERROR") from exc
 
-        try:
-            payload = response.json()
-            summary = payload["choices"][0]["message"]["content"]
-        except (KeyError, IndexError, TypeError, ValueError) as exc:
-            raise ProviderError("DeepSeek 返回结构异常", code="DEEPSEEK_ERROR") from exc
-
-        return {"summary": summary, "model": body["model"]}
+        return {"summary": summary, "model": model}
 ```
 
 Key rules:
 
-- **Never return an error dict** — raise `ProviderError` (or `ValidationError`
-  for bad input). The router converts it into the standard envelope.
-- **Never let exceptions escape raw** — wrap network / HTTP / parse failures
-  in `ProviderError` so the client gets a typed, structured error.
+- **Never return an error dict** — raise the HTTP-layer `ProviderError` (or
+  `ValidationError` for bad input). The router converts it into the standard
+  envelope.
+- **Two-layer error model** — the shared client raises
+  `app.services.llm.ProviderError` (carries `.retryable`); tools catch it and
+  re-raise as `app.core.errors.ProviderError` with `code="LLM_ERROR"`. Don't
+  let either leak raw.
 - **Validate the model response** with a Pydantic schema before using it
   (see `ModelTaskAnalysis` in `task_decomposer_client.py`).
 
@@ -578,36 +566,28 @@ Key rules:
 
 For streaming AI responses (ChatGPT-style), use WebSocket to push tokens
 progressively. The existing `ws/handler.py` shows the session/persistence
-pattern; a streaming tool would send `{"type": "token", "content": ...}`
-frames from an `httpx.AsyncClient.stream` loop and finish with a `done` frame:
+pattern; a streaming tool sends `{"type": "token", "content": ...}` frames
+from `chat_completion_stream` and finishes with a `done` frame:
 
 ```python
 import json
-import httpx
 from fastapi import WebSocket
 
+from app.services.llm import chat_completion_stream, get_default_model
 
-async def stream_ai_response(websocket: WebSocket, prompt: str, api_key: str):
-    async with httpx.AsyncClient(timeout=120) as client:
-        async with client.stream(
-            "POST",
-            "https://api.deepseek.com/chat/completions",
-            headers={"Authorization": f"Bearer {api_key}"},
-            json={
-                "model": "deepseek-v4-flash",
-                "messages": [{"role": "user", "content": prompt}],
-                "stream": True,
-            },
-        ) as response:
-            async for line in response.aiter_lines():
-                if line.startswith("data: ") and line != "data: [DONE]":
-                    chunk = json.loads(line[6:])
-                    delta = chunk["choices"][0].get("delta", {}).get("content", "")
-                    if delta:
-                        await websocket.send_text(json.dumps({
-                            "type": "token",
-                            "content": delta,
-                        }))
+
+async def stream_ai_response(websocket: WebSocket, prompt: str, model: str = ""):
+    stream = chat_completion_stream(
+        [{"role": "user", "content": prompt}],
+        model or get_default_model(),
+    )
+    try:
+        async for delta in stream:
+            await websocket.send_text(json.dumps({"type": "token", "content": delta}))
+    finally:
+        # Always close the generator so its transport is released, even if the
+        # client drops mid-stream.
+        await stream.aclose()
 
     await websocket.send_text(json.dumps({"type": "done", "content": ""}))
 ```
@@ -620,13 +600,58 @@ Add the API key to `backend/.env` (never commit to git) — or the repo root
 ```ini
 # backend/.env
 DEEPSEEK_API_KEY=sk-...
-DEEPSEEK_MODELS=deepseek-v4-flash,deepseek-v4-pro
-DEEPSEEK_DEFAULT_MODEL=deepseek-v4-flash
 ```
 
-These fields already exist in `Settings` (`backend/app/core/config.py`). The
-frontend reads the model list from `GET /api/config`, so a new model added
-here is picked up without a frontend rebuild.
+The registry defaults to DeepSeek only; everything the app knows about models
+comes from `Settings.llm_providers` (`backend/app/core/config.py`). The
+frontend reads the model list from `GET /api/config` (fields `models` /
+`default_model`), so a new model or provider added here is picked up without a
+frontend rebuild.
+
+### Adding a Model Provider
+
+Adding an OpenAI-compatible provider is **configuration only — no code
+change**. Two steps:
+
+1. **Declare its key** as a new Settings field (e.g. `glm_api_key: str = ""`
+   → `GLM_API_KEY` in `.env`), next to `deepseek_api_key` in
+   `backend/app/core/config.py`.
+2. **Add it to the registry** by setting `LLM_PROVIDERS` (JSON list) in
+   `backend/.env` — or the root `.env` for Docker Compose. Each entry:
+
+   ```json
+   [
+     {
+       "id": "glm",
+       "name": "Zhipu GLM",
+       "base_url": "https://open.bigmodel.cn/api/paas",
+       "api_key_env": "glm_api_key",
+       "models": ["glm-4-plus", "glm-4-air"],
+       "default_model": "glm-4-plus",
+       "max_output_tokens": 8192,
+       "context_length": 128000,
+       "session_key_prefix": "",
+       "supports_thinking": false
+     }
+   ]
+   ```
+
+   - `base_url` is scheme + host; `/chat/completions` is appended.
+   - `api_key_env` names the Settings field holding that provider's key.
+   - `supports_thinking` gates the `thinking` / `reasoning_effort` params
+     (DeepSeek V4 only today; set `false` for providers without the extension).
+   - `session_key_prefix` validates transient keys (DeepSeek = `"sk-"`;
+     `""` accepts any non-empty key).
+   - To keep DeepSeek too, include **both** entries in the list, and keep
+     `LLM_DEFAULT_PROVIDER=deepseek` (or point it at the new provider).
+
+3. Restart the backend. `GET /api/config` and the chat `connected` frame now
+   advertise the new models automatically.
+
+Non-OpenAI wire formats (Anthropic Messages, Gemini `generateContent`) are not
+implemented yet; the seam is `ProviderConfig.api_style` in
+`backend/app/services/llm.py` (`_chat_url` / `_chat_headers`) — add a branch
+there and the callers never change.
 
 ### Using the Cache Layer
 

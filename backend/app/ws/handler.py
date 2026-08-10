@@ -7,7 +7,8 @@ Design (first principles):
   endpoint stays scriptable.
 - Session resume: the client may reconnect with ``?session_id=...`` and the
   same conversation continues in the same DB row.
-- Real AI replies: each user message is answered by DeepSeek, with the last
+- Real AI replies: each user message is answered by the configured model
+  provider, with the last
   ``_CONTEXT_LIMIT`` stored messages as conversation memory. The user sees a
   ``typing`` frame while the model works, then ``chunk`` frames carrying the
   reply as it streams in, and finally a ``message`` frame with the full text.
@@ -37,7 +38,13 @@ from app.services.chat_history import (
     prune_session_messages,
     touch_session,
 )
-from app.services.deepseek import DeepSeekError, chat_completion_stream
+from app.services.llm import (
+    ProviderError,
+    chat_completion_stream,
+    get_default_model,
+    get_models,
+    is_model_supported,
+)
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -134,8 +141,8 @@ async def chat_websocket(
                 "session_id": session.id,
                 # Advertise the model choice so the client can render a picker
                 # without a separate config fetch.
-                "models": settings.deepseek_models_list,
-                "default_model": settings.deepseek_default_model,
+                "models": get_models(),
+                "default_model": get_default_model(),
             }
         )
     )
@@ -172,23 +179,24 @@ async def chat_websocket(
                 )
                 continue
 
-            # A per-message model override must be one of the configured models;
-            # anything else is rejected before the (paid, rate-limited) call.
-            if model and model not in settings.deepseek_models_list:
+            # A per-message model override must be one of the configured
+            # models; anything else is rejected before the (paid, rate-limited)
+            # call.
+            if model and not is_model_supported(model):
                 await websocket.send_text(
                     json.dumps(
                         {
                             "type": "error",
                             "message": (
                                 f"不支持的模型 '{model}'。可选："
-                                f"{', '.join(settings.deepseek_models_list)}"
+                                f"{', '.join(get_models())}"
                             ),
                         }
                     )
                 )
                 continue
 
-            # Every message triggers a paid DeepSeek call, so the socket is
+            # Every message triggers a paid model call, so the socket is
             # rate-limited like any other spend surface (per-IP bucket + the
             # shared global budget). On over-budget we tell the client and
             # skip the model call — the socket stays alive for the next try.
@@ -229,7 +237,7 @@ async def chat_websocket(
             reply = ""
             stream = chat_completion_stream(
                 [{"role": "system", "content": _SYSTEM_PROMPT}] + context,
-                model or settings.deepseek_default_model,
+                model or get_default_model(),
                 # Chat budget grounded in the documented V4 limits: thinking
                 # is off by default (its token burn caused empty replies) and
                 # the answer gets chat_max_tokens of headroom. If an operator
@@ -255,7 +263,7 @@ async def chat_websocket(
                 # disconnect path runs (the finally below still closes the
                 # generator's transport).
                 raise
-            except DeepSeekError as exc:
+            except ProviderError as exc:
                 # Keep the socket alive; surface a visible, honest message.
                 # (Also covers the retryable empty-stream error above.)
                 reply = f"（AI 调用失败：{exc}）"

@@ -24,7 +24,9 @@ function getDefaultDraft(): Draft {
     raw_task: "",
     context: "",
     task_type: "feature",
-    model: "deepseek-v4-flash",
+    // The model comes from the backend's /config once loaded; an empty value
+    // means "pick the default" (the config-load effect fills it in).
+    model: "",
     risk_hints: [],
   };
 }
@@ -59,8 +61,8 @@ const RISK_LABELS: Record<string, string> = {
 export default function TaskDecomposerPage() {
   const [draft, setDraft] = useState<Draft>(loadDraft);
   const [apiKey, setApiKey] = useState("");
-  const [models, setModels] = useState<string[]>(["deepseek-v4-flash", "deepseek-v4-pro"]);
-  const [defaultModel, setDefaultModel] = useState("deepseek-v4-flash");
+  const [models, setModels] = useState<string[]>([]);
+  const [defaultModel, setDefaultModel] = useState("");
   const [analysis, setAnalysis] = useState<TaskAnalysis | null>(null);
   const [analyzing, setAnalyzing] = useState(false);
   const [outputState, setOutputState] = useState("等待分析");
@@ -75,12 +77,12 @@ export default function TaskDecomposerPage() {
       .then((res) => {
         if (res.success && res.data) {
           const cfg = res.data;
-          setModels(cfg.deepseek_models);
-          setDefaultModel(cfg.deepseek_default_model);
+          setModels(cfg.models);
+          setDefaultModel(cfg.default_model);
           setDraft((prev) =>
-            cfg.deepseek_models.includes(prev.model)
+            cfg.models.includes(prev.model)
               ? prev
-              : { ...prev, model: cfg.deepseek_default_model }
+              : { ...prev, model: cfg.default_model }
           );
         }
       })
@@ -142,7 +144,7 @@ export default function TaskDecomposerPage() {
       raw_task: "给历史训练记录增加 JSON 导入功能，导入前要确认，不能覆盖现有历史，坏文件要提示。",
       context: "项目是本地 HTML 练习工具，历史记录保存在 localStorage。上一轮已经支持 JSON / Markdown 导出。",
       task_type: "feature",
-      model: "deepseek-v4-flash",
+      model: defaultModel,
       risk_hints: ["data_loss", "compatibility", "browser_api"],
     });
     showToast("示例已载入");
@@ -173,7 +175,7 @@ export default function TaskDecomposerPage() {
           risk_hints: draft.risk_hints,
           session_api_key: apiKey || undefined,
         },
-        { timeoutMs: 90_000 } // DeepSeek analysis can take a while
+        { timeoutMs: 90_000 } // LLM analysis can take a while
       );
       if (res.success && res.data) {
         setAnalysis(res.data.analysis);
@@ -220,7 +222,8 @@ export default function TaskDecomposerPage() {
 
   // ── Clear ──
   const clearAll = () => {
-    setDraft(getDefaultDraft());
+    // Reset to the backend-declared default model (not a hardcoded id).
+    setDraft({ ...getDefaultDraft(), model: defaultModel });
     setAnalysis(null);
     setError("");
     setOutputState("等待分析");
@@ -258,12 +261,12 @@ export default function TaskDecomposerPage() {
         {/* Top bar */}
         <header className="td-topbar">
           <div>
-            <p className="td-eyebrow">DeepSeek 驱动 / 非流式任务分析</p>
+            <p className="td-eyebrow">LLM 驱动 / 非流式任务分析</p>
             <h1>Task Decomposer</h1>
-            <p>输入一句模糊任务，由后端调用 DeepSeek 分析成可执行任务卡。</p>
+            <p>输入一句模糊任务，由后端调用 LLM 分析成可执行任务卡。</p>
           </div>
           <section className="td-key-panel">
-            <p className="td-eyebrow">DeepSeek API Key</p>
+            <p className="td-eyebrow">API Key</p>
             <div className="td-key-grid">
               <div className="td-field" style={{ marginBottom: 0 }}>
                 <label htmlFor="tdApiKey">临时 Key（留空使用服务器 .env）</label>
@@ -271,7 +274,7 @@ export default function TaskDecomposerPage() {
                   id="tdApiKey"
                   type="password"
                   autoComplete="off"
-                  placeholder="sk-..."
+                  placeholder="临时 Key"
                   value={apiKey}
                   onChange={(e) => setApiKey(e.target.value)}
                 />
@@ -401,7 +404,7 @@ export default function TaskDecomposerPage() {
               <div className="td-task-card">
                 {!analysis && !error && (
                   <div className="td-empty">
-                    启动后端，配置 DeepSeek API Key，然后点击"分析任务"。
+                    启动后端，配置 API Key，然后点击"分析任务"。
                   </div>
                 )}
                 {error && <div className="td-error">{error}</div>}

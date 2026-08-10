@@ -7,8 +7,15 @@ failures by raising ``ValidationError`` / ``NotFoundError`` / ``ProviderError``.
 
 import pytest
 
+from app.core.config import settings
 from app.core.errors import NotFoundError, ProviderError, ValidationError
-from app.services.deepseek import resolve_api_key
+from app.services.llm import (
+    ProviderError as LlmProviderError,
+)
+from app.services.llm import (
+    resolve_api_key,
+    resolve_provider,
+)
 from app.services.task_decomposer_history import create_history
 from app.tools.modules.task_decomposer import (
     TaskDecomposerTool,
@@ -16,12 +23,14 @@ from app.tools.modules.task_decomposer import (
     _history_to_dict,
 )
 from app.tools.modules.task_decomposer_client import (
-    DeepSeekClientError,
     ModelTaskAnalysis,
     build_agent_prompt,
 )
 
 tool = TaskDecomposerTool()
+
+# The DeepSeek provider, resolved once for the key-resolution unit tests.
+_DEEPSEEK = resolve_provider("deepseek-v4-flash")
 
 
 def test_tool_id_and_metadata():
@@ -86,11 +95,9 @@ async def test_analyze_task_oversized_risk_hint_rejected(db):
 @pytest.mark.asyncio
 async def test_analyze_task_coerces_numeric_raw_task(db, monkeypatch):
     """A numeric raw_task is coerced to a string instead of 500ing."""
+    monkeypatch.setattr(settings, "deepseek_api_key", "sk-x")
     monkeypatch.setattr(
-        "app.services.deepseek.settings.deepseek_api_key", "sk-x"
-    )
-    monkeypatch.setattr(
-        "app.tools.modules.task_decomposer.analyze_with_deepseek",
+        "app.tools.modules.task_decomposer.analyze_with_llm",
         _fake_analyze,
     )
     result = await tool.handle_invoke(
@@ -101,7 +108,7 @@ async def test_analyze_task_coerces_numeric_raw_task(db, monkeypatch):
 
 
 async def _fake_analyze(input_data):
-    """Stands in for analyze_with_deepseek so the test needs no network."""
+    """Stands in for analyze_with_llm so the test needs no network."""
     from app.tools.modules.task_decomposer_client import TaskAnalysis
 
     return TaskAnalysis(
@@ -121,9 +128,7 @@ async def _fake_analyze(input_data):
 @pytest.mark.asyncio
 async def test_analyze_task_no_api_key(db, monkeypatch):
     """Without .env key or session key, the client error surfaces as ProviderError."""
-    monkeypatch.setattr(
-        "app.services.deepseek.settings.deepseek_api_key", ""
-    )
+    monkeypatch.setattr(settings, "deepseek_api_key", "")
     with pytest.raises(ProviderError) as excinfo:
         await tool.handle_invoke(
             {
@@ -137,21 +142,18 @@ async def test_analyze_task_no_api_key(db, monkeypatch):
             },
             db,
         )
-    assert excinfo.value.code == "DEEPSEEK_ERROR"
+    assert excinfo.value.code == "LLM_ERROR"
 
 
 @pytest.mark.asyncio
 async def test_analyze_task_prunes_history(db, monkeypatch):
     """History retention runs on analyze so the table stays bounded."""
-    from app.core.config import settings
     from app.services.task_decomposer_history import count_history, create_history
 
     monkeypatch.setattr(settings, "task_decomposer_history_max_records", 3)
+    monkeypatch.setattr(settings, "deepseek_api_key", "sk-x")
     monkeypatch.setattr(
-        "app.services.deepseek.settings.deepseek_api_key", "sk-x"
-    )
-    monkeypatch.setattr(
-        "app.tools.modules.task_decomposer.analyze_with_deepseek", _fake_analyze
+        "app.tools.modules.task_decomposer.analyze_with_llm", _fake_analyze
     )
 
     for i in range(3):
@@ -254,7 +256,7 @@ def test_history_to_dict():
     assert d["risk_level"] == "medium"
 
 
-# ── DeepSeek client unit tests ──
+# ── Model client unit tests ──
 
 
 def test_build_agent_prompt_includes_sections():
@@ -299,35 +301,27 @@ def test_build_agent_prompt_with_empty_lists():
 
 def test_resolve_api_key_prefers_settings(monkeypatch):
     """The shared client prefers settings.deepseek_api_key over a session key."""
-    monkeypatch.setattr(
-        "app.services.deepseek.settings.deepseek_api_key", "env-key"
-    )
-    result = resolve_api_key(session_api_key="sk-session-key")
+    monkeypatch.setattr(settings, "deepseek_api_key", "env-key")
+    result = resolve_api_key(_DEEPSEEK, session_api_key="sk-session-key")
     assert result == "env-key"
 
 
 def test_resolve_api_key_fallback(monkeypatch):
     """The shared client falls back to a valid session key when env key is empty."""
-    monkeypatch.setattr(
-        "app.services.deepseek.settings.deepseek_api_key", ""
-    )
-    result = resolve_api_key(session_api_key="sk-session-key")
+    monkeypatch.setattr(settings, "deepseek_api_key", "")
+    result = resolve_api_key(_DEEPSEEK, session_api_key="sk-session-key")
     assert result == "sk-session-key"
 
 
 def test_resolve_api_key_rejects_bad_session_key(monkeypatch):
     """A session key not starting with 'sk-' must be rejected."""
-    monkeypatch.setattr(
-        "app.services.deepseek.settings.deepseek_api_key", ""
-    )
-    with pytest.raises(DeepSeekClientError, match="sk-"):
-        resolve_api_key(session_api_key="not-a-key")
+    monkeypatch.setattr(settings, "deepseek_api_key", "")
+    with pytest.raises(LlmProviderError, match="sk-"):
+        resolve_api_key(_DEEPSEEK, session_api_key="not-a-key")
 
 
 def test_resolve_api_key_raises_when_both_missing(monkeypatch):
     """The shared client raises when both keys are absent."""
-    monkeypatch.setattr(
-        "app.services.deepseek.settings.deepseek_api_key", ""
-    )
-    with pytest.raises(DeepSeekClientError, match="未配置"):
-        resolve_api_key(session_api_key="")
+    monkeypatch.setattr(settings, "deepseek_api_key", "")
+    with pytest.raises(LlmProviderError, match="未配置"):
+        resolve_api_key(_DEEPSEEK, session_api_key="")
