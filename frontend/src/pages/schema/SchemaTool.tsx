@@ -82,7 +82,7 @@ function coerceValue(schema: JsonSchema, raw: string): unknown {
     case "boolean":
       return raw === "true";
     case "number":
-      return schema.type === "integer" ? Number.parseInt(raw, 10) : Number.parseFloat(raw);
+      return Number(raw);
     case "array":
       return parseList(raw);
     default:
@@ -146,7 +146,28 @@ export function SchemaForm({
     event.preventDefault();
     const coerced: Record<string, unknown> = {};
     for (const [key, prop] of Object.entries(properties)) {
-      coerced[key] = coerceValue(prop, values[key] ?? "");
+      const raw = values[key] ?? "";
+      const kind = fieldKind(prop);
+      if (required.has(key) && raw === "") return;
+      if (
+        kind === "string" &&
+        ((prop.minLength !== undefined && raw.length < prop.minLength) ||
+          (prop.maxLength !== undefined && raw.length > prop.maxLength))
+      ) {
+        return;
+      }
+      if (kind === "number") {
+        if (raw === "") continue;
+        const value = Number(raw);
+        if (
+          !Number.isFinite(value) ||
+          (prop.minimum !== undefined && value < prop.minimum) ||
+          (prop.maximum !== undefined && value > prop.maximum)
+        ) {
+          return;
+        }
+      }
+      coerced[key] = coerceValue(prop, raw);
     }
     onSubmit(coerced);
   };
@@ -209,7 +230,12 @@ function Field({
           {label}
           {required ? " *" : ""}
         </span>
-        <select id={id} value={value} onChange={(e) => onChange(e.target.value)}>
+        <select
+          id={id}
+          value={value}
+          required={required}
+          onChange={(e) => onChange(e.target.value)}
+        >
           {value === "" && <option value="" />}
           {options.map((option) => (
             <option key={option} value={option}>
@@ -231,6 +257,7 @@ function Field({
         <textarea
           id={id}
           value={value}
+          required={required}
           placeholder="JSON array or one item per line"
           onChange={(e) => onChange(e.target.value)}
         />
@@ -248,6 +275,11 @@ function Field({
         id={id}
         type={kind === "number" ? "number" : "text"}
         value={value}
+        required={required}
+        minLength={kind === "string" ? schema.minLength : undefined}
+        maxLength={kind === "string" ? schema.maxLength : undefined}
+        min={kind === "number" ? schema.minimum : undefined}
+        max={kind === "number" ? schema.maximum : undefined}
         onChange={(e) => onChange(e.target.value)}
       />
     </label>

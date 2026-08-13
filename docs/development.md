@@ -25,8 +25,7 @@
 - Node.js >= 22
 - Python >= 3.11
 - Docker & Docker Compose (for containerized mode)
-- PostgreSQL 16 (for non-Docker mode)
-- Redis 7 (for non-Docker mode)
+- PostgreSQL 16 and Redis 7 (only for the full non-Docker stack)
 
 ## Quick Start — Docker (Recommended)
 
@@ -43,6 +42,17 @@ This starts four services:
 - `redis` at localhost:6379
 
 ## Non-Docker Development
+
+From the project root, the one-click scripts prepare missing dependencies and
+start the backend with SQLite plus the Vite frontend:
+
+```bash
+# macOS
+./start.sh
+
+# Windows
+start.bat
+```
 
 ### Backend
 
@@ -104,7 +114,7 @@ docker compose up postgres redis
 ## Verification Checklist
 
 - [ ] **AC-1**: Open http://localhost:5173 → tool list loads → click "Blank Tool" → enter text → submit → see echo response
-- [ ] **AC-2**: Open http://localhost:5173 → click "Chat Tool" → click "New Chat" → send message → receive echo reply
+- [ ] **AC-2**: Open http://localhost:5173 → click "Chat Tool" → click "New Chat" → send message → receive a model reply (or a clear provider error when no valid API key is configured)
 - [ ] **AC-3**: Open http://localhost:5173 → "Code Agent Flow Visualizer" appears → click → 9 stages navigable → save a record → persists after refresh
 - [ ] **AC-4**: Create `backend/app/tool_plugins/my_tool/plugin.py` (a `ToolPlugin` with one operation) → restart backend + rebuild frontend → tool appears in the Dock
 - [ ] **AC-5**: Send chat messages → restart backend → reconnect → messages are persisted (check via API)

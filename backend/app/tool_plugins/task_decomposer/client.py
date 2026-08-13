@@ -170,7 +170,7 @@ async def _call_once(input_data: AnalyzeTaskInput) -> ModelTaskAnalysis:
             {"role": "user", "content": build_user_prompt(input_data)},
         ],
         input_data.model,
-        api_key=input_data.session_api_key,
+        session_api_key=input_data.session_api_key,
         max_tokens=2200,
         temperature=0.2,
         response_format={"type": "json_object"},

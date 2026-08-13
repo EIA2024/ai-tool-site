@@ -28,7 +28,25 @@ function loadDraft(): Draft {
   try {
     const raw = localStorage.getItem(DRAFT_KEY);
     if (!raw) return getDefaultDraft();
-    return { ...getDefaultDraft(), ...JSON.parse(raw) };
+    const parsed: unknown = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return getDefaultDraft();
+    }
+    const stored = parsed as Record<string, unknown>;
+    const defaults = getDefaultDraft();
+    return {
+      raw_task:
+        typeof stored.raw_task === "string" ? stored.raw_task : defaults.raw_task,
+      context: typeof stored.context === "string" ? stored.context : defaults.context,
+      task_type:
+        typeof stored.task_type === "string" ? stored.task_type : defaults.task_type,
+      model: typeof stored.model === "string" ? stored.model : defaults.model,
+      risk_hints:
+        Array.isArray(stored.risk_hints) &&
+        stored.risk_hints.every((hint) => typeof hint === "string")
+          ? stored.risk_hints
+          : defaults.risk_hints,
+    };
   } catch {
     localStorage.removeItem(DRAFT_KEY);
     return getDefaultDraft();
@@ -63,6 +81,8 @@ export default function TaskDecomposerPlugin({ client }: ToolPluginProps) {
   const [history, setHistory] = useState<HistoryRecord[]>([]);
   const [historyFilter, setHistoryFilter] = useState("");
   const toastRef = useRef<HTMLDivElement>(null);
+  const analyzeGenerationRef = useRef(0);
+  const historyGenerationRef = useRef(0);
 
   // ── Model list is the backend's single source of truth ──
   useEffect(() => {
@@ -100,11 +120,12 @@ export default function TaskDecomposerPlugin({ client }: ToolPluginProps) {
 
   // ── History fetch ──
   const fetchHistory = useCallback(async () => {
+    const generation = ++historyGenerationRef.current;
     try {
       const res = await client.invoke<ListHistoryData>("list_history", {
         task_type: historyFilter || undefined,
       });
-      if (res.success && res.data) {
+      if (generation === historyGenerationRef.current && res.success && res.data) {
         setHistory(res.data.records);
       }
     } catch {
@@ -149,6 +170,7 @@ export default function TaskDecomposerPlugin({ client }: ToolPluginProps) {
       showToast("请先输入原始任务");
       return;
     }
+    const generation = ++analyzeGenerationRef.current;
 
     setAnalysis(null);
     setError("");
@@ -168,6 +190,7 @@ export default function TaskDecomposerPlugin({ client }: ToolPluginProps) {
         },
         { timeoutMs: 90_000 } // LLM analysis can take a while
       );
+      if (generation !== analyzeGenerationRef.current) return;
       if (res.success && res.data) {
         setAnalysis(res.data.analysis);
         setOutputState("已完成");
@@ -180,12 +203,15 @@ export default function TaskDecomposerPlugin({ client }: ToolPluginProps) {
         showToast(msg);
       }
     } catch (err) {
+      if (generation !== analyzeGenerationRef.current) return;
       const msg = err instanceof Error ? err.message : `请求失败：${String(err)}`;
       setError(msg);
       setOutputState("失败");
       showToast(msg);
     } finally {
-      setAnalyzing(false);
+      if (generation === analyzeGenerationRef.current) {
+        setAnalyzing(false);
+      }
     }
   };
 
@@ -212,10 +238,12 @@ export default function TaskDecomposerPlugin({ client }: ToolPluginProps) {
 
   // ── Clear ──
   const clearAll = () => {
+    analyzeGenerationRef.current++;
     setDraft({ ...getDefaultDraft(), model: defaultModel });
     setAnalysis(null);
     setError("");
     setOutputState("等待分析");
+    setAnalyzing(false);
     showToast("已清空");
   };
 

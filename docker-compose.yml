@@ -58,6 +58,7 @@ services:
       LLM_PROVIDERS: ${LLM_PROVIDERS:-}
       LLM_DEFAULT_PROVIDER: ${LLM_DEFAULT_PROVIDER:-}
       LLM_DEFAULT_MODEL: ${LLM_DEFAULT_MODEL:-}
+      AUDIT_OPERATOR_TOKEN: ${AUDIT_OPERATOR_TOKEN:-}
       RATE_LIMIT_ENABLED: ${RATE_LIMIT_ENABLED:-true}
       RATE_LIMIT_PER_MINUTE: ${RATE_LIMIT_PER_MINUTE:-20}
       RATE_LIMIT_GLOBAL_PER_MINUTE: ${RATE_LIMIT_GLOBAL_PER_MINUTE:-200}
@@ -91,6 +92,16 @@ services:
     depends_on:
       backend:
         condition: service_healthy
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://localhost:5173/').then(response => process.exit(response.ok ? 0 : 1)).catch(() => process.exit(1))"
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
     restart: unless-stopped
 
 volumes:

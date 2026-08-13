@@ -106,8 +106,7 @@ class SendMessageInput(BaseModel):
     session_id: str | None = Field(default=None, max_length=64)
     content: str = Field(min_length=1, max_length=10_000)
     model: str = Field(default="", max_length=64)
-    # Transient per-session key (like Task Decomposer's session_api_key): when
-    # set it is used instead of the server key for this one message.
+    # Transient per-session key used only when no server key is configured.
     session_api_key: str = Field(default="", max_length=256)
 
     @field_validator("content")
@@ -233,18 +232,27 @@ async def send_message(payload: SendMessageInput, context: ToolContext):
             f"不支持的模型 '{model}'。可选：{', '.join(get_models())}"
         )
 
+    session_id = session.id
     try:
         history = await get_context_messages(
             context.db,
-            session.id,
+            session_id,
             limit=_MAX_CONTEXT_FETCH,
         )
     except Exception:
         logger.warning(
             "Failed to load chat context for session %s",
-            session.id,
+            session_id,
             exc_info=True,
         )
+        await context.db.rollback()
+        session = await get_session(context.db, session_id)
+        if session is None:
+            session = await create_session(
+                context.db,
+                title="WebSocket Chat",
+                tool_id="chat_tool",
+            )
         history = []
     model_context = [
         {"role": _map_role(message.role), "content": message.content}
@@ -279,7 +287,7 @@ async def send_message(payload: SendMessageInput, context: ToolContext):
             if settings.chat_thinking
             else None
         ),
-        api_key=payload.session_api_key,
+        session_api_key=payload.session_api_key,
     )
     chunks: list[str] = []
     reply = ""

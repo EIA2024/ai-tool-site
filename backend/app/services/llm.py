@@ -14,10 +14,13 @@ Gemini native adapter would add a branch in :func:`_chat_url` /
 """
 
 import json
+import logging
 
 import httpx
 
 from app.core.config import ProviderConfig, settings
+
+logger = logging.getLogger(__name__)
 
 
 class ProviderError(RuntimeError):
@@ -117,11 +120,19 @@ def _chat_headers(provider: ProviderConfig, key: str) -> dict[str, str]:
     raise ProviderError(f"api_style '{provider.api_style}' is not implemented")
 
 
+def _log_upstream_error(response: httpx.Response) -> None:
+    logger.warning(
+        "Model upstream returned HTTP %s",
+        response.status_code,
+    )
+
+
 async def chat_completion(
     messages: list[dict[str, str]],
     model: str,
     *,
     api_key: str = "",
+    session_api_key: str = "",
     max_tokens: int = 4096,
     temperature: float = 0.2,
     response_format: dict[str, str] | None = None,
@@ -142,7 +153,7 @@ async def chat_completion(
     Raises ``ProviderError``; check ``retryable`` for the retry policy.
     """
     provider = resolve_provider(model)
-    key = api_key or resolve_api_key(provider)
+    key = api_key or resolve_api_key(provider, session_api_key)
     # The provider caps output (e.g. DeepSeek 384K tokens); clamp defensively.
     max_tokens = min(max_tokens, provider.max_output_tokens)
     body: dict = {
@@ -169,12 +180,9 @@ async def chat_completion(
         raise ProviderError("无法连接模型服务", retryable=True) from exc
 
     if response.status_code >= 400:
-        # Include the upstream detail (truncated) so operators can diagnose
-        # auth/quota errors without a network trace.
-        detail = (response.text or "").strip()[:300]
-        suffix = f": {detail}" if detail else ""
+        _log_upstream_error(response)
         raise ProviderError(
-            f"模型服务返回错误：HTTP {response.status_code}{suffix}",
+            f"模型服务返回错误：HTTP {response.status_code}",
             retryable=response.status_code >= 500,
         )
 
@@ -196,6 +204,7 @@ async def chat_completion_stream(
     model: str,
     *,
     api_key: str = "",
+    session_api_key: str = "",
     max_tokens: int = 4096,
     temperature: float = 0.2,
     response_format: dict[str, str] | None = None,
@@ -219,7 +228,7 @@ async def chat_completion_stream(
     entirely to make the failure impossible.
     """
     provider = resolve_provider(model)
-    key = api_key or resolve_api_key(provider)
+    key = api_key or resolve_api_key(provider, session_api_key)
     # The provider caps output (e.g. DeepSeek 384K tokens); clamp defensively.
     max_tokens = min(max_tokens, provider.max_output_tokens)
     body: dict = {
@@ -246,12 +255,9 @@ async def chat_completion_stream(
                 json=body,
             ) as response:
                 if response.status_code >= 400:
-                    # Error bodies are small; reading them here is safe even in
-                    # streaming mode (we are aborting anyway).
-                    detail = (response.text or "").strip()[:300]
-                    suffix = f": {detail}" if detail else ""
+                    _log_upstream_error(response)
                     raise ProviderError(
-                        f"模型服务返回错误：HTTP {response.status_code}{suffix}",
+                        f"模型服务返回错误：HTTP {response.status_code}",
                         retryable=response.status_code >= 500,
                     )
                 yielded_any = False

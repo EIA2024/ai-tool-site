@@ -1438,15 +1438,6 @@ button:disabled {
   color: var(--text-dim);
   white-space: nowrap;
 }
-.usage-input {
-  max-width: 320px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  color: var(--text-dim);
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 12px;
-}
 
 /* Error text */
 .error-text {

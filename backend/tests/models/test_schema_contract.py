@@ -8,9 +8,9 @@ largest value each tool/API layer will accept.
 
 from sqlalchemy import String
 
-from app.tool_plugins.task_decomposer.models import TaskAnalysisHistory
 from app.tool_plugins.chat_tool.models import ChatMessage, ChatSession
 from app.tool_plugins.code_agent_flow_viz.models import AgentPracticeRecord
+from app.tool_plugins.task_decomposer.models import TaskAnalysisHistory
 
 
 def _length(column) -> int:

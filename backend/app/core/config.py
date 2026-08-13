@@ -133,6 +133,9 @@ class Settings(BaseSettings):
     # exceeds this count, so a long-lived deployment can't grow the audit log
     # without bound. Set to 0 to keep every record (not recommended).
     audit_max_records: int = 50_000
+    # Optional credential for retrieving raw audit input/output. Public audit
+    # responses always contain metadata only.
+    audit_operator_token: str = ""
 
     # Task Decomposer history retention: prune the oldest analyses once the
     # table exceeds this count. Same rationale as audit_max_records. Set to 0

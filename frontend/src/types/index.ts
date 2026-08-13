@@ -116,12 +116,17 @@ export interface RealtimeConnection {
 
 /* ── ToolClient ── */
 
+export interface RequestOptions {
+  timeoutMs?: number;
+  signal?: AbortSignal;
+}
+
 export interface ToolClient {
   readonly toolId: string;
   invoke<T = unknown>(
     operation: string,
     payload?: Record<string, unknown>,
-    opts?: { timeoutMs?: number }
+    opts?: RequestOptions
   ): Promise<ApiResponse<T>>;
   connect(operation: string): RealtimeConnection;
 }

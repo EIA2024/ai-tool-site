@@ -13,7 +13,9 @@ V4 thinking extensions on ``supports_thinking``.
 """
 
 import json
+import logging
 
+import httpx
 import pytest
 
 from app.core.config import settings
@@ -83,12 +85,13 @@ def _sse(*deltas, finish=None):
 
 
 class _FakeResponse:
-    status_code = 200
-    text = ""
-
-    def __init__(self, lines=None, json_data=None):
+    def __init__(
+        self, lines=None, json_data=None, status_code=200, text=""
+    ):
         self._lines = lines or []
         self._json = json_data
+        self.status_code = status_code
+        self.text = text
 
     async def aiter_lines(self):
         for line in self._lines:
@@ -107,10 +110,14 @@ class _FakeResponse:
 class _FakeClient:
     """Double for httpx.AsyncClient; records ``(method, url, kwargs)``."""
 
-    def __init__(self, lines=None, json_data=None):
+    def __init__(
+        self, lines=None, json_data=None, status_code=200, text=""
+    ):
         self.calls = []
         self._lines = lines or []
         self._json = json_data
+        self._status_code = status_code
+        self._text = text
 
     async def __aenter__(self):
         return self
@@ -120,20 +127,35 @@ class _FakeClient:
 
     def stream(self, method, url, **kwargs):
         self.calls.append((method, url, kwargs))
-        return _FakeResponse(lines=self._lines)
+        return _FakeResponse(
+            lines=self._lines,
+            status_code=self._status_code,
+            text=self._text,
+        )
 
     async def post(self, url, **kwargs):
         # httpx's post() is a coroutine; match that shape so `await` works.
         self.calls.append(("POST", url, kwargs))
-        return _FakeResponse(json_data=self._json)
+        return _FakeResponse(
+            json_data=self._json,
+            status_code=self._status_code,
+            text=self._text,
+        )
 
 
 @pytest.fixture
 def fake_client(monkeypatch):
     """Point ``httpx.AsyncClient`` at a fake that captures the request."""
 
-    def install(lines=None, json_data=None) -> _FakeClient:
-        client = _FakeClient(lines=lines, json_data=json_data)
+    def install(
+        lines=None, json_data=None, status_code=200, text=""
+    ) -> _FakeClient:
+        client = _FakeClient(
+            lines=lines,
+            json_data=json_data,
+            status_code=status_code,
+            text=text,
+        )
         monkeypatch.setattr(
             "app.services.llm.httpx.AsyncClient",
             lambda **kwargs: client,
@@ -154,6 +176,326 @@ def _request(client: _FakeClient) -> tuple[str, dict, dict]:
 
 async def _collect(gen) -> list[str]:
     return [d async for d in gen]
+
+
+@pytest.mark.asyncio
+async def test_api_key_overrides_server_key(monkeypatch, fake_client):
+    monkeypatch.setattr(settings, "deepseek_api_key", "sk-server")
+    client = fake_client(json_data={"choices": [{"message": {"content": "ok"}}]})
+
+    await chat_completion(
+        [{"role": "user", "content": "hi"}],
+        "deepseek-v4-flash",
+        api_key="trusted-internal-key",
+    )
+
+    assert _request(client)[1]["Authorization"] == "Bearer trusted-internal-key"
+
+
+@pytest.mark.asyncio
+async def test_session_api_key_is_overridden_by_server_key(monkeypatch, fake_client):
+    monkeypatch.setattr(settings, "deepseek_api_key", "sk-server")
+    client = fake_client(json_data={"choices": [{"message": {"content": "ok"}}]})
+
+    await chat_completion(
+        [{"role": "user", "content": "hi"}],
+        "deepseek-v4-flash",
+        session_api_key="sk-session",
+    )
+
+    assert _request(client)[1]["Authorization"] == "Bearer sk-server"
+
+
+@pytest.mark.asyncio
+async def test_session_api_key_falls_back_when_server_key_missing(
+    monkeypatch, fake_client
+):
+    monkeypatch.setattr(settings, "deepseek_api_key", "")
+    client = fake_client(json_data={"choices": [{"message": {"content": "ok"}}]})
+
+    await chat_completion(
+        [{"role": "user", "content": "hi"}],
+        "deepseek-v4-flash",
+        session_api_key="sk-session",
+    )
+
+    assert _request(client)[1]["Authorization"] == "Bearer sk-session"
+
+
+@pytest.mark.asyncio
+async def test_invalid_session_api_key_is_rejected_without_server_key(
+    monkeypatch, fake_client
+):
+    monkeypatch.setattr(settings, "deepseek_api_key", "")
+    client = fake_client(json_data={"choices": [{"message": {"content": "ok"}}]})
+
+    with pytest.raises(ProviderError, match="sk-"):
+        await chat_completion(
+            [{"role": "user", "content": "hi"}],
+            "deepseek-v4-flash",
+            session_api_key="invalid-session-key",
+        )
+
+    assert client.calls == []
+
+
+@pytest.mark.asyncio
+async def test_stream_api_key_overrides_server_key(monkeypatch, fake_client):
+    monkeypatch.setattr(settings, "deepseek_api_key", "sk-server")
+    client = fake_client(lines=_sse({"content": "ok"}, finish="stop"))
+
+    await _collect(
+        chat_completion_stream(
+            [{"role": "user", "content": "hi"}],
+            "deepseek-v4-flash",
+            api_key="trusted-internal-key",
+        )
+    )
+
+    assert _request(client)[1]["Authorization"] == "Bearer trusted-internal-key"
+
+
+@pytest.mark.asyncio
+async def test_stream_session_api_key_is_overridden_by_server_key(
+    monkeypatch, fake_client
+):
+    monkeypatch.setattr(settings, "deepseek_api_key", "sk-server")
+    client = fake_client(lines=_sse({"content": "ok"}, finish="stop"))
+
+    await _collect(
+        chat_completion_stream(
+            [{"role": "user", "content": "hi"}],
+            "deepseek-v4-flash",
+            session_api_key="sk-session",
+        )
+    )
+
+    assert _request(client)[1]["Authorization"] == "Bearer sk-server"
+
+
+@pytest.mark.asyncio
+async def test_stream_session_api_key_falls_back_when_server_key_missing(
+    monkeypatch, fake_client
+):
+    monkeypatch.setattr(settings, "deepseek_api_key", "")
+    client = fake_client(lines=_sse({"content": "ok"}, finish="stop"))
+
+    await _collect(
+        chat_completion_stream(
+            [{"role": "user", "content": "hi"}],
+            "deepseek-v4-flash",
+            session_api_key="sk-session",
+        )
+    )
+
+    assert _request(client)[1]["Authorization"] == "Bearer sk-session"
+
+
+@pytest.mark.asyncio
+async def test_stream_invalid_session_api_key_is_rejected_without_server_key(
+    monkeypatch, fake_client
+):
+    monkeypatch.setattr(settings, "deepseek_api_key", "")
+    client = fake_client(lines=_sse({"content": "ok"}, finish="stop"))
+
+    with pytest.raises(ProviderError, match="sk-"):
+        await _collect(
+            chat_completion_stream(
+                [{"role": "user", "content": "hi"}],
+                "deepseek-v4-flash",
+                session_api_key="invalid-session-key",
+            )
+        )
+
+    assert client.calls == []
+
+
+@pytest.mark.asyncio
+async def test_sync_upstream_error_hides_body_from_client_and_log(
+    monkeypatch, fake_client, caplog
+):
+    monkeypatch.setattr(settings, "deepseek_api_key", "sk-server")
+    body = '{"error":"quota exhausted","api_key":"sk-upstream-secret"}'
+    fake_client(status_code=429, text=body)
+
+    with caplog.at_level(logging.WARNING, logger="app.services.llm"):
+        with pytest.raises(ProviderError) as excinfo:
+            await chat_completion(
+                [{"role": "user", "content": "hi"}],
+                "deepseek-v4-flash",
+            )
+
+    assert str(excinfo.value) == "模型服务返回错误：HTTP 429"
+    assert excinfo.value.retryable is False
+    assert "HTTP 429" in caplog.text
+    assert "quota exhausted" not in caplog.text
+    assert "sk-upstream-secret" not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_upstream_error_string_cannot_leak_secrets_to_log(
+    monkeypatch, fake_client, caplog
+):
+    monkeypatch.setattr(settings, "deepseek_api_key", "sk-server")
+    body = json.dumps(
+        {
+            "error": (
+                "request failed with Bearer bearer-secret, "
+                "key sk-plain-string-secret, password=hunter2"
+            )
+        }
+    )
+    fake_client(status_code=500, text=body)
+
+    with caplog.at_level(logging.WARNING, logger="app.services.llm"):
+        with pytest.raises(ProviderError):
+            await chat_completion(
+                [{"role": "user", "content": "hi"}],
+                "deepseek-v4-flash",
+            )
+
+    assert "HTTP 500" in caplog.text
+    assert "Bearer" not in caplog.text
+    assert "bearer-secret" not in caplog.text
+    assert "sk-plain-string-secret" not in caplog.text
+    assert "hunter2" not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_stream_upstream_error_does_not_log_body(
+    monkeypatch, caplog
+):
+    monkeypatch.setattr(settings, "deepseek_api_key", "sk-server")
+    response = httpx.Response(
+        503,
+        stream=httpx.ByteStream(
+            b'{"error":"temporary failure","api_key":"sk-upstream-secret"}'
+        ),
+        request=httpx.Request("POST", "https://test.local"),
+    )
+
+    class _StreamingClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+        def stream(self, method, url, **kwargs):
+            class _ResponseContext:
+                async def __aenter__(self):
+                    return response
+
+                async def __aexit__(self, *exc):
+                    await response.aclose()
+                    return False
+
+            return _ResponseContext()
+
+    monkeypatch.setattr(
+        "app.services.llm.httpx.AsyncClient",
+        lambda **kwargs: _StreamingClient(),
+    )
+
+    with caplog.at_level(logging.WARNING, logger="app.services.llm"):
+        with pytest.raises(ProviderError) as excinfo:
+            await _collect(
+                chat_completion_stream(
+                    [{"role": "user", "content": "hi"}],
+                    "deepseek-v4-flash",
+                )
+            )
+
+    assert str(excinfo.value) == "模型服务返回错误：HTTP 503"
+    assert excinfo.value.retryable is True
+    assert "HTTP 503" in caplog.text
+    assert "temporary failure" not in caplog.text
+    assert "sk-upstream-secret" not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_sync_timeout_is_wrapped_as_retryable_provider_error(monkeypatch):
+    monkeypatch.setattr(settings, "deepseek_api_key", "sk-server")
+    timeout = httpx.TimeoutException(
+        "request timed out",
+        request=httpx.Request("POST", "https://test.local"),
+    )
+
+    class _TimeoutClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+        async def post(self, url, **kwargs):
+            raise timeout
+
+    monkeypatch.setattr(
+        "app.services.llm.httpx.AsyncClient",
+        lambda **kwargs: _TimeoutClient(),
+    )
+
+    with pytest.raises(ProviderError) as excinfo:
+        await chat_completion(
+            [{"role": "user", "content": "hi"}],
+            "deepseek-v4-flash",
+        )
+
+    assert str(excinfo.value) == "无法连接模型服务"
+    assert excinfo.value.retryable is True
+    assert excinfo.value.__cause__ is timeout
+
+
+@pytest.mark.asyncio
+async def test_stream_read_timeout_is_wrapped_as_retryable_provider_error(
+    monkeypatch,
+):
+    monkeypatch.setattr(settings, "deepseek_api_key", "sk-server")
+    timeout = httpx.ReadTimeout(
+        "stream read timed out",
+        request=httpx.Request("POST", "https://test.local"),
+    )
+
+    class _TimeoutResponse:
+        status_code = 200
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+        async def aiter_lines(self):
+            raise timeout
+            yield
+
+    class _TimeoutClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+        def stream(self, method, url, **kwargs):
+            return _TimeoutResponse()
+
+    monkeypatch.setattr(
+        "app.services.llm.httpx.AsyncClient",
+        lambda **kwargs: _TimeoutClient(),
+    )
+
+    with pytest.raises(ProviderError) as excinfo:
+        await _collect(
+            chat_completion_stream(
+                [{"role": "user", "content": "hi"}],
+                "deepseek-v4-flash",
+            )
+        )
+
+    assert str(excinfo.value) == "无法连接模型服务"
+    assert excinfo.value.retryable is True
+    assert excinfo.value.__cause__ is timeout
 
 
 # ── Streaming parser ──

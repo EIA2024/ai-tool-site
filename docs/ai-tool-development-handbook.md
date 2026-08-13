@@ -350,7 +350,7 @@ Kimi, Qwen, ...) is one `LLM_PROVIDERS` entry plus one Settings field for its AP
 key — no client code. New tools call `chat_completion` (request-response) or
 `chat_completion_stream` (realtime) instead of talking to httpx directly. A
 complete, production-shaped reference is the
-[Task Decomposer](backend/app/tool_plugins/task_decomposer/client.py) plugin:
+[Task Decomposer](../backend/app/tool_plugins/task_decomposer/client.py) plugin:
 prompt building lives in `client.py`, upstream failures are caught as the shared
 `ProviderError` and re-wrapped as the HTTP-layer error type, and the response is
 validated with Pydantic.
@@ -451,8 +451,12 @@ alembic upgrade head
 
 Every operation is audited **automatically** by the Host
 (`app/tool_host/gateway.py` → `app/services/audit.py::log_tool_call`): input,
-output, and success flag are written to `tool_call_records` on every call. View
-via `GET /api/audit/tool-calls`. Handlers never write audit records themselves.
+output, and success flag are written to `tool_call_records` on every call.
+`GET /api/audit/summary` exposes aggregate usage. Anonymous
+`GET /api/audit/tool-calls` responses keep the record metadata but return
+`input_data` / `output_data` as `null`; raw details require
+`include_details=true` and a bearer token matching `AUDIT_OPERATOR_TOKEN`.
+Handlers never write audit records themselves.
 
 For your own tables, use the **injected** `context.db` and **never commit**
 inside the handler — the Host commits once per request. If your handler must

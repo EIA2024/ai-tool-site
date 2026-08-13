@@ -1,4 +1,4 @@
-import type { ApiResponse } from "../types";
+import type { ApiResponse, RequestOptions } from "../types";
 
 const BASE = import.meta.env.VITE_API_BASE || "/api";
 const DEFAULT_TIMEOUT_MS = 30_000;
@@ -15,10 +15,6 @@ export class ApiError extends Error {
   }
 }
 
-interface RequestOptions {
-  timeoutMs?: number;
-}
-
 async function request<T>(
   path: string,
   init: RequestInit,
@@ -26,39 +22,77 @@ async function request<T>(
 ): Promise<ApiResponse<T>> {
   const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  let timedOut = false;
+  let callerAborted = opts.signal?.aborted ?? false;
+  let rejectCancellation: (reason: DOMException) => void = () => {};
+  const cancellation = new Promise<never>((_, reject) => {
+    rejectCancellation = reject;
+  });
+  const onInternalAbort = () => {
+    rejectCancellation(new DOMException("Aborted", "AbortError"));
+  };
+  const onCallerAbort = () => {
+    callerAborted = true;
+    controller.abort();
+  };
+  const timer = setTimeout(() => {
+    if (!controller.signal.aborted) {
+      timedOut = true;
+      controller.abort();
+    }
+  }, timeoutMs);
 
-  let res: Response;
+  controller.signal.addEventListener("abort", onInternalAbort, { once: true });
+  if (callerAborted) {
+    controller.abort();
+  } else {
+    opts.signal?.addEventListener("abort", onCallerAbort, { once: true });
+  }
+
   try {
-    res = await fetch(`${BASE}${path}`, { ...init, signal: controller.signal });
+    const res = await Promise.race([
+      fetch(`${BASE}${path}`, { ...init, signal: controller.signal }),
+      cancellation,
+    ]);
+
+    let body: ApiResponse<T>;
+    try {
+      body = (await Promise.race([res.json(), cancellation])) as ApiResponse<T>;
+    } catch (err) {
+      if (err instanceof DOMException && err.name === "AbortError") {
+        throw err;
+      }
+      throw new ApiError(
+        "INVALID_RESPONSE",
+        `Server returned non-JSON (HTTP ${res.status})`,
+        res.status
+      );
+    }
+
+    if (!res.ok) {
+      throw new ApiError(
+        body.error?.code ?? "HTTP_ERROR",
+        body.error?.message ?? `HTTP ${res.status}`,
+        res.status
+      );
+    }
+    return body;
   } catch (err) {
     if (err instanceof DOMException && err.name === "AbortError") {
-      throw new ApiError("TIMEOUT", `Request timed out after ${timeoutMs}ms`, 408);
+      if (timedOut) {
+        throw new ApiError("TIMEOUT", `Request timed out after ${timeoutMs}ms`, 408);
+      }
+      if (callerAborted) {
+        throw new ApiError("ABORTED", "Request was aborted", 0);
+      }
     }
+    if (err instanceof ApiError) throw err;
     throw new ApiError("NETWORK_ERROR", `Network error: ${String(err)}`, 0);
   } finally {
     clearTimeout(timer);
+    opts.signal?.removeEventListener("abort", onCallerAbort);
+    controller.signal.removeEventListener("abort", onInternalAbort);
   }
-
-  let body: ApiResponse<T>;
-  try {
-    body = (await res.json()) as ApiResponse<T>;
-  } catch {
-    throw new ApiError(
-      "INVALID_RESPONSE",
-      `Server returned non-JSON (HTTP ${res.status})`,
-      res.status
-    );
-  }
-
-  if (!res.ok) {
-    throw new ApiError(
-      body.error?.code ?? "HTTP_ERROR",
-      body.error?.message ?? `HTTP ${res.status}`,
-      res.status
-    );
-  }
-  return body;
 }
 
 export function get<T = unknown>(

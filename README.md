@@ -74,6 +74,20 @@ docker compose exec backend alembic upgrade head
 
 ### 本地开发（无 Docker）
 
+**一键启动：**
+
+```bash
+# macOS
+./start.sh
+
+# Windows（命令行运行或直接双击 start.bat）
+start.bat
+```
+
+脚本会自动准备缺失的本地依赖，使用 SQLite 启动后端和 Vite 前端，并打开
+`http://localhost:5173`。按 `Ctrl+C` 可同时停止前后端；不希望自动打开浏览器时使用
+`./start.sh --no-open`（macOS）或 `start.bat -NoOpen`（Windows）。
+
 **后端（推荐，使用 SQLite，无需 PostgreSQL/Redis）：**
 
 ```bash

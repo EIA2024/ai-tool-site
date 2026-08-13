@@ -4,13 +4,6 @@ import type { AuditListData, AuditSummaryData } from "../types";
 
 const RECENT_LIMIT = 20;
 
-/** Truncate a logged payload for display; keep it on one line. */
-function summarize(data: string | null): string {
-  if (!data) return "—";
-  const flat = data.replace(/\s+/g, " ").trim();
-  return flat.length > 80 ? `${flat.slice(0, 80)}…` : flat;
-}
-
 export default function UsagePage() {
   const [summary, setSummary] = useState<AuditSummaryData | null>(null);
   const [recent, setRecent] = useState<AuditListData | null>(null);
@@ -124,7 +117,6 @@ export default function UsagePage() {
               <th>Time</th>
               <th>Tool</th>
               <th>Result</th>
-              <th>Input</th>
             </tr>
           </thead>
           <tbody>
@@ -141,7 +133,6 @@ export default function UsagePage() {
                     {r.success ? "ok" : "failed"}
                   </span>
                 </td>
-                <td className="usage-input">{summarize(r.input_data)}</td>
               </tr>
             ))}
           </tbody>

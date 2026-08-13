@@ -103,20 +103,22 @@ async def realtime_operation(
             input_value = validate_input(operation, payload)
             context = ToolContext(db=db, request_id=request_id, client_ip=ip)
             events = operation.handler(input_value, context)
-            saw_result = False
+            result_event: RealtimeEvent | None = None
             async for raw_event in events:
                 event = RealtimeEvent.model_validate(raw_event)
                 if event.request_id != request_id:
                     raise RuntimeError("plugin emitted an event for the wrong request_id")
                 if event.type == "result":
                     validate_output(operation, event.data)
-                    saw_result = True
+                    result_event = event
                     output = event.data
+                    continue
                 await websocket.send_json(event.model_dump(mode="json"))
-            if not saw_result:
+            if result_event is None:
                 raise RuntimeError("realtime plugin completed without a result event")
             await db.commit()
             success = True
+            await websocket.send_json(result_event.model_dump(mode="json"))
         except WebSocketDisconnect:
             await db.rollback()
             break
@@ -143,7 +145,14 @@ async def realtime_operation(
                 break
         finally:
             if events is not None:
-                await events.aclose()
+                try:
+                    await events.aclose()
+                except Exception:
+                    logger.exception(
+                        "Failed to close realtime event stream: %s.%s",
+                        tool_id,
+                        operation_id,
+                    )
             if request_id is not None:
                 await write_operation_audit(
                     db,

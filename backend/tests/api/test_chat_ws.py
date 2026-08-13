@@ -9,13 +9,17 @@ cross-event-loop teardown flakiness.
 """
 
 import json
+import logging
+from types import SimpleNamespace
 
 import pytest
 from fastapi import WebSocketDisconnect
 from sqlalchemy import select
 
 from app.core.config import settings
+from app.models import ToolCallRecord
 from app.services.llm import ProviderError
+from app.tool_host import websocket as websocket_host
 from app.tool_host.websocket import realtime_operation
 from app.tool_plugins.chat_tool.models import ChatMessage
 from app.tool_plugins.chat_tool.repository import get_session
@@ -274,8 +278,7 @@ async def test_ws_passes_effort_when_thinking_enabled(db, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_ws_passes_session_api_key(db, monkeypatch):
-    """A transient per-session key reaches the model call (used in place of
-    the server key, exactly like Task Decomposer's session_api_key)."""
+    """A transient key reaches the model call as an unresolved fallback."""
     captured = {}
 
     async def _stub(messages, model, **kwargs):
@@ -286,7 +289,7 @@ async def test_ws_passes_session_api_key(db, monkeypatch):
     ws = FakeWebSocket([_invoke({"content": "hi", "session_api_key": "sk-session"})])
     await realtime_operation(ws, "chat_tool", "send_message", db)
 
-    assert captured["api_key"] == "sk-session"
+    assert captured["session_api_key"] == "sk-session"
     assert ws.closed is None
 
 
@@ -340,9 +343,83 @@ async def test_ws_stream_closes_generator_on_client_drop(db, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_ws_sends_result_only_after_commit_succeeds(db, monkeypatch):
+    """A failed operation commit must produce only an error terminal frame."""
+    original_commit = db.commit
+    commit_calls = 0
+
+    async def _fail_operation_commit():
+        nonlocal commit_calls
+        commit_calls += 1
+        if commit_calls == 1:
+            raise RuntimeError("commit failed")
+        await original_commit()
+
+    monkeypatch.setattr(
+        "app.tool_plugins.chat_tool.plugin.chat_completion_stream", _stub_completion
+    )
+    monkeypatch.setattr(db, "commit", _fail_operation_commit)
+    ws = FakeWebSocket([_invoke({"content": "hi"})])
+    await realtime_operation(ws, "chat_tool", "send_message", db)
+
+    types = [frame["type"] for frame in ws.sent]
+    assert types == ["ready", "progress", "delta", "error"]
+
+
+@pytest.mark.asyncio
+async def test_ws_aclose_failure_is_logged_and_audited(
+    db, monkeypatch, caplog
+):
+    """Generator cleanup failures must not escape or skip operation auditing."""
+    operation = websocket_host.resolve_operation(
+        websocket_host.registry, "chat_tool", "send_message"
+    )
+
+    class _CloseFails:
+        def __init__(self, events):
+            self._events = events
+
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            return await self._events.__anext__()
+
+        async def aclose(self):
+            await self._events.aclose()
+            raise RuntimeError("cleanup failed")
+
+    def _handler(input_value, context):
+        return _CloseFails(operation.handler(input_value, context))
+
+    wrapped_operation = SimpleNamespace(
+        id=operation.id,
+        transport=operation.transport,
+        input_model=operation.input_model,
+        output_model=operation.output_model,
+        handler=_handler,
+    )
+    monkeypatch.setattr(
+        "app.tool_plugins.chat_tool.plugin.chat_completion_stream", _stub_completion
+    )
+    monkeypatch.setattr(websocket_host, "resolve_operation", lambda *args: wrapped_operation)
+    caplog.set_level(logging.ERROR, logger="app.tool_host.websocket")
+
+    ws = FakeWebSocket([_invoke({"content": "hi"})])
+    await realtime_operation(ws, "chat_tool", "send_message", db)
+
+    assert "Failed to close realtime event stream" in caplog.text
+    result = await db.execute(select(ToolCallRecord))
+    audit = result.scalar_one()
+    assert audit.success is True
+
+
+@pytest.mark.asyncio
 async def test_ws_persists_user_and_assistant(db, monkeypatch):
     """Both roles land in the DB for history reload."""
-    monkeypatch.setattr("app.tool_plugins.chat_tool.plugin.chat_completion_stream", _stub_completion)
+    monkeypatch.setattr(
+        "app.tool_plugins.chat_tool.plugin.chat_completion_stream", _stub_completion
+    )
     ws = FakeWebSocket([_invoke({"content": "persist me"})])
     await realtime_operation(ws, "chat_tool", "send_message", db)
 
@@ -358,7 +435,9 @@ async def test_ws_persists_user_and_assistant(db, monkeypatch):
 @pytest.mark.asyncio
 async def test_ws_resumes_existing_session(db, monkeypatch):
     """Passing a session id continues the same conversation."""
-    monkeypatch.setattr("app.tool_plugins.chat_tool.plugin.chat_completion_stream", _stub_completion)
+    monkeypatch.setattr(
+        "app.tool_plugins.chat_tool.plugin.chat_completion_stream", _stub_completion
+    )
 
     first = FakeWebSocket([_invoke({"content": "hello"})])
     await realtime_operation(first, "chat_tool", "send_message", db)
@@ -378,7 +457,9 @@ async def test_ws_resumes_existing_session(db, monkeypatch):
 async def test_ws_invalid_session_id_starts_fresh(db, monkeypatch):
     """A bogus session id must not crash the socket — it silently falls back to
     a brand-new session."""
-    monkeypatch.setattr("app.tool_plugins.chat_tool.plugin.chat_completion_stream", _stub_completion)
+    monkeypatch.setattr(
+        "app.tool_plugins.chat_tool.plugin.chat_completion_stream", _stub_completion
+    )
 
     ws = FakeWebSocket([_invoke({"content": "hello", "session_id": "not-a-real-session"})])
     await realtime_operation(ws, "chat_tool", "send_message", db)
@@ -392,9 +473,66 @@ async def test_ws_invalid_session_id_starts_fresh(db, monkeypatch):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("existing_session", [False, True])
+async def test_ws_recovers_transaction_after_context_query_failure(
+    db, monkeypatch, existing_session
+):
+    """A failed context query must not poison later writes in the same turn."""
+    session_id = None
+    if existing_session:
+        first = FakeWebSocket([_invoke({"content": "first"})])
+        monkeypatch.setattr(
+            "app.tool_plugins.chat_tool.plugin.chat_completion_stream",
+            _stub_completion,
+        )
+        await realtime_operation(first, "chat_tool", "send_message", db)
+        session_id = first.sent[-1]["data"]["session_id"]
+
+    async def _failed_context_query(db_session, session_id, limit):
+        db_session.add(
+            ChatMessage(
+                id="invalid-message",
+                session_id=session_id,
+                role="invalid-role",
+                content="force transaction failure",
+            )
+        )
+        await db_session.flush()
+
+    monkeypatch.setattr(
+        "app.tool_plugins.chat_tool.plugin.get_context_messages",
+        _failed_context_query,
+    )
+    ws = FakeWebSocket(
+        [_invoke({"content": "after failure", "session_id": session_id})]
+    )
+    await realtime_operation(ws, "chat_tool", "send_message", db)
+
+    assert not any(frame["type"] == "error" for frame in ws.sent)
+    result = ws.sent[-1]
+    assert result["type"] == "result"
+    recovered_session_id = result["data"]["session_id"]
+    if existing_session:
+        assert recovered_session_id == session_id
+    else:
+        assert recovered_session_id
+
+    rows = (
+        await db.execute(
+            select(ChatMessage).where(
+                ChatMessage.session_id == recovered_session_id
+            )
+        )
+    ).scalars().all()
+    assert [row.role for row in rows[-2:]] == ["user", "assistant"]
+
+
+@pytest.mark.asyncio
 async def test_ws_autotitles_session_from_first_message(db, monkeypatch):
     """The session title is derived from the first user message."""
-    monkeypatch.setattr("app.tool_plugins.chat_tool.plugin.chat_completion_stream", _stub_completion)
+    monkeypatch.setattr(
+        "app.tool_plugins.chat_tool.plugin.chat_completion_stream", _stub_completion
+    )
     ws = FakeWebSocket([_invoke({"content": "  帮我写一个登录功能  "})])
     await realtime_operation(ws, "chat_tool", "send_message", db)
     sid = ws.sent[-1]["data"]["session_id"]

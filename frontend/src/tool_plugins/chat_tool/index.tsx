@@ -23,6 +23,12 @@ interface UiMessage {
   streaming?: boolean;
 }
 
+interface PendingRequest {
+  sessionId: string | null;
+  viewToken: number;
+  streaming: { id: string; text: string } | null;
+}
+
 let localCounter = 0;
 
 export default function ChatToolPlugin({ client }: ToolPluginProps) {
@@ -34,6 +40,8 @@ export default function ChatToolPlugin({ client }: ToolPluginProps) {
   const [sessions, setSessions] = useState<ChatSession[]>([]);
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [loadingSessions, setLoadingSessions] = useState(true);
+  const [sessionsError, setSessionsError] = useState<string | null>(null);
+  const [historyError, setHistoryError] = useState<string | null>(null);
   const [models, setModels] = useState<string[]>([]);
   const [selectedModel, setSelectedModel] = useState("");
   // Transient per-session key — blank uses the server .env key.
@@ -41,8 +49,11 @@ export default function ChatToolPlugin({ client }: ToolPluginProps) {
 
   const connRef = useRef<RealtimeConnection | null>(null);
   const activeSessionIdRef = useRef<string | null>(null);
-  const streamingRef = useRef<{ id: string; text: string } | null>(null);
+  const requestsRef = useRef(new Map<string, PendingRequest>());
   const historyTokenRef = useRef(0);
+  const sessionsTokenRef = useRef(0);
+  const viewTokenRef = useRef(0);
+  const mountedRef = useRef(true);
   const messagesRef = useRef<HTMLDivElement | null>(null);
   const stickToBottomRef = useRef(true);
 
@@ -52,13 +63,27 @@ export default function ChatToolPlugin({ client }: ToolPluginProps) {
   }, []);
 
   const refreshSessions = useCallback(async () => {
+    const token = ++sessionsTokenRef.current;
+    setLoadingSessions(true);
+    setSessionsError(null);
     try {
       const res = await client.invoke<{ sessions: ChatSession[] }>("list_sessions", {
         limit: 50,
       });
-      if (res.success && res.data) setSessions(res.data.sessions);
+      if (token !== sessionsTokenRef.current || !mountedRef.current) return;
+      if (res.success && res.data) {
+        setSessions(res.data.sessions);
+      } else {
+        setSessionsError(res.error?.message ?? "Failed to load sessions.");
+      }
+    } catch {
+      if (token === sessionsTokenRef.current && mountedRef.current) {
+        setSessionsError("Failed to load sessions.");
+      }
     } finally {
-      setLoadingSessions(false);
+      if (token === sessionsTokenRef.current && mountedRef.current) {
+        setLoadingSessions(false);
+      }
     }
   }, [client]);
 
@@ -79,21 +104,28 @@ export default function ChatToolPlugin({ client }: ToolPluginProps) {
   const loadHistory = useCallback(
     async (sessionId: string) => {
       const token = ++historyTokenRef.current;
-      const res = await client.invoke<{ messages: ApiChatMessage[] }>("list_messages", {
-        session_id: sessionId,
-      });
-      if (token !== historyTokenRef.current) return; // a newer switch won — drop stale data
-      if (res.success && res.data) {
-        setMessages(
-          res.data.messages.map((m) => ({
-            localId: `hist-${m.id}`,
-            role: m.role,
-            content: m.content,
-            timestamp: m.created_at ?? "",
-          }))
-        );
-      } else {
-        setMessages([]);
+      setHistoryError(null);
+      try {
+        const res = await client.invoke<{ messages: ApiChatMessage[] }>("list_messages", {
+          session_id: sessionId,
+        });
+        if (token !== historyTokenRef.current || !mountedRef.current) return;
+        if (res.success && res.data) {
+          setMessages(
+            res.data.messages.map((m) => ({
+              localId: `hist-${m.id}`,
+              role: m.role,
+              content: m.content,
+              timestamp: m.created_at ?? "",
+            }))
+          );
+        } else {
+          setHistoryError(res.error?.message ?? "Failed to load messages.");
+        }
+      } catch {
+        if (token === historyTokenRef.current && mountedRef.current) {
+          setHistoryError("Failed to load messages.");
+        }
       }
     },
     [client]
@@ -101,24 +133,57 @@ export default function ChatToolPlugin({ client }: ToolPluginProps) {
 
   const handleEvent = useCallback(
     (event: RealtimeServerEvent) => {
-      if (event.type === "progress") {
-        setTyping(true);
-        const sid = event.data.session_id;
-        if (typeof sid === "string" && sid && !activeSessionIdRef.current) setActive(sid);
+      if (event.type === "ready") return;
+      const request = event.request_id ? requestsRef.current.get(event.request_id) : undefined;
+      if (!request) {
+        if (event.type === "error" && event.request_id === null) {
+          setTyping(false);
+          setMessages((prev) => [
+            ...prev,
+            {
+              localId: `sys-${localCounter++}`,
+              role: "system",
+              content: event.data.message || "发生错误",
+              timestamp: new Date().toISOString(),
+            },
+          ]);
+        }
         return;
       }
+
+      if (event.type === "progress") {
+        const sid = event.data.session_id;
+        if (typeof sid === "string" && sid) {
+          request.sessionId = sid;
+          if (
+            request.viewToken === viewTokenRef.current &&
+            activeSessionIdRef.current === null
+          ) {
+            setActive(sid);
+          }
+        }
+        if (request.sessionId === activeSessionIdRef.current) setTyping(true);
+        return;
+      }
+
+      const belongsToActiveView =
+        request.sessionId !== null
+          ? request.sessionId === activeSessionIdRef.current
+          : request.viewToken === viewTokenRef.current && activeSessionIdRef.current === null;
+
       if (event.type === "delta") {
+        if (!belongsToActiveView) return;
         setTyping(false);
         const text = typeof event.data.content === "string" ? event.data.content : "";
-        if (streamingRef.current) {
-          streamingRef.current.text += text;
-          const { id, text: full } = streamingRef.current;
+        if (request.streaming) {
+          request.streaming.text += text;
+          const { id, text: full } = request.streaming;
           setMessages((prev) =>
             prev.map((m) => (m.localId === id ? { ...m, content: full, streaming: true } : m))
           );
         } else {
           const id = `stream-${localCounter++}`;
-          streamingRef.current = { id, text };
+          request.streaming = { id, text };
           setMessages((prev) => [
             ...prev,
             { localId: id, role: "assistant", content: text, timestamp: new Date().toISOString(), streaming: true },
@@ -127,50 +192,74 @@ export default function ChatToolPlugin({ client }: ToolPluginProps) {
         return;
       }
       if (event.type === "result") {
-        setTyping(false);
         const data = event.data as unknown as SendMessageData;
         const content = data.message?.content ?? "";
-        if (data.session_id) setActive(data.session_id);
-        if (streamingRef.current) {
-          const id = streamingRef.current.id;
-          streamingRef.current = null;
-          setMessages((prev) =>
-            prev.map((m) => (m.localId === id ? { ...m, content, streaming: false } : m))
-          );
-        } else {
-          setMessages((prev) => [
-            ...prev,
-            { localId: `ws-${localCounter++}`, role: "assistant", content, timestamp: new Date().toISOString() },
-          ]);
+        const resultBelongsToActiveView = data.session_id
+          ? data.session_id === activeSessionIdRef.current ||
+            (request.sessionId === null &&
+              request.viewToken === viewTokenRef.current &&
+              activeSessionIdRef.current === null)
+          : belongsToActiveView;
+        if (data.session_id && request.sessionId === null) {
+          request.sessionId = data.session_id;
+          if (resultBelongsToActiveView && activeSessionIdRef.current === null) {
+            setActive(data.session_id);
+          }
         }
+        if (resultBelongsToActiveView) {
+          setTyping(false);
+          if (request.streaming) {
+            const id = request.streaming.id;
+            request.streaming = null;
+            setMessages((prev) =>
+              prev.map((m) => (m.localId === id ? { ...m, content, streaming: false } : m))
+            );
+          } else {
+            setMessages((prev) => [
+              ...prev,
+              { localId: `ws-${localCounter++}`, role: "assistant", content, timestamp: new Date().toISOString() },
+            ]);
+          }
+        }
+        requestsRef.current.delete(event.request_id);
         // The server may have auto-titled this session from its first message.
-        refreshSessions();
+        void refreshSessions();
         return;
       }
       if (event.type === "error") {
-        setTyping(false);
-        setMessages((prev) => [
-          ...prev,
-          {
-            localId: `sys-${localCounter++}`,
-            role: "system",
-            content: event.data.message || "发生错误",
-            timestamp: new Date().toISOString(),
-          },
-        ]);
+        requestsRef.current.delete(event.request_id ?? "");
+        if (belongsToActiveView) {
+          setTyping(false);
+          setMessages((prev) => [
+            ...prev,
+            {
+              localId: `sys-${localCounter++}`,
+              role: "system",
+              content: event.data.message || "发生错误",
+              timestamp: new Date().toISOString(),
+            },
+          ]);
+        }
       }
     },
     [refreshSessions, setActive]
   );
 
   useEffect(() => {
-    refreshSessions();
+    mountedRef.current = true;
+    void refreshSessions();
     const conn = client.connect("send_message");
     conn.onEvent(handleEvent);
     conn.onStatus(setStatus);
     conn.open();
     connRef.current = conn;
+    const requests = requestsRef.current;
     return () => {
+      mountedRef.current = false;
+      historyTokenRef.current += 1;
+      sessionsTokenRef.current += 1;
+      viewTokenRef.current += 1;
+      requests.clear();
       conn.close();
       connRef.current = null;
     };
@@ -194,19 +283,28 @@ export default function ChatToolPlugin({ client }: ToolPluginProps) {
   };
 
   const handleNewSession = () => {
+    historyTokenRef.current += 1;
+    viewTokenRef.current += 1;
     setActive(null);
     setMessages([]);
+    setHistoryError(null);
     setTyping(false);
-    streamingRef.current = null;
+    requestsRef.current.forEach((request) => {
+      request.streaming = null;
+    });
     if (!connRef.current?.isOpen) connRef.current?.open();
   };
 
-  const handleSelectSession = async (sessionId: string) => {
+  const handleSelectSession = (sessionId: string) => {
+    viewTokenRef.current += 1;
     setActive(sessionId);
     setMessages([]);
+    setHistoryError(null);
     setTyping(false);
-    streamingRef.current = null;
-    await loadHistory(sessionId);
+    requestsRef.current.forEach((request) => {
+      request.streaming = null;
+    });
+    void loadHistory(sessionId);
     if (!connRef.current?.isOpen) connRef.current?.open();
   };
 
@@ -220,10 +318,15 @@ export default function ChatToolPlugin({ client }: ToolPluginProps) {
       return;
     }
     if (activeSessionIdRef.current === sessionId) {
+      historyTokenRef.current += 1;
+      viewTokenRef.current += 1;
       setActive(null);
       setMessages([]);
+      setHistoryError(null);
       setTyping(false);
-      streamingRef.current = null;
+      requestsRef.current.forEach((request) => {
+        request.streaming = null;
+      });
     }
     setSessions((prev) => prev.filter((s) => s.id !== sessionId));
   };
@@ -238,7 +341,14 @@ export default function ChatToolPlugin({ client }: ToolPluginProps) {
     if (selectedModel) payload.model = selectedModel;
     if (activeSessionIdRef.current) payload.session_id = activeSessionIdRef.current;
     if (sessionApiKey) payload.session_api_key = sessionApiKey;
-    connRef.current?.send(payload);
+    const requestId = connRef.current?.send(payload);
+    if (requestId) {
+      requestsRef.current.set(requestId, {
+        sessionId: activeSessionIdRef.current,
+        viewToken: viewTokenRef.current,
+        streaming: null,
+      });
+    }
   };
 
   return (
@@ -278,7 +388,13 @@ export default function ChatToolPlugin({ client }: ToolPluginProps) {
         <aside className="chat-sessions">
           <h3>Sessions</h3>
           {loadingSessions && <p className="status-text">Loading...</p>}
-          {!loadingSessions && sessions.length === 0 && (
+          {!loadingSessions && sessionsError && (
+            <div className="status-text" role="alert">
+              <p>{sessionsError}</p>
+              <button onClick={() => void refreshSessions()}>Retry sessions</button>
+            </div>
+          )}
+          {!loadingSessions && !sessionsError && sessions.length === 0 && (
             <p className="status-text">No sessions yet. Start a new chat.</p>
           )}
           <ul>
@@ -307,7 +423,19 @@ export default function ChatToolPlugin({ client }: ToolPluginProps) {
 
         <div className="chat-main">
           <div className="chat-messages" ref={messagesRef} onScroll={handleMessagesScroll}>
-            {messages.length === 0 && (
+            {historyError && (
+              <div className="status-text" role="alert">
+                <p>{historyError}</p>
+                <button
+                  onClick={() => {
+                    if (activeSessionIdRef.current) void loadHistory(activeSessionIdRef.current);
+                  }}
+                >
+                  Retry messages
+                </button>
+              </div>
+            )}
+            {!historyError && messages.length === 0 && (
               <p className="status-text">
                 {status === "connected"
                   ? "No messages yet — say hello!"

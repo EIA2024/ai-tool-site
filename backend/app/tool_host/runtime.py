@@ -4,7 +4,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from pydantic import BaseModel, ValidationError as PydanticValidationError
+from pydantic import BaseModel
+from pydantic import ValidationError as PydanticValidationError
 
 from app.core.errors import NotFoundError, ValidationError
 from app.tool_host.contracts import OperationDefinition, ToolContext, Transport

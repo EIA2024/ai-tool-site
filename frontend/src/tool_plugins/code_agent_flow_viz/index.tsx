@@ -344,7 +344,9 @@ export default function CodeAgentFlowVizPlugin({ client }: ToolPluginProps) {
         limit: PAGE,
         offset,
       });
-      if (!res.success || !res.data) break;
+      if (!res.success || !res.data) {
+        throw new Error(res.error?.message ?? "Failed to fetch records for export.");
+      }
       const page = res.data.records;
       if (page.length === 0) break;
       all.push(...page);
@@ -391,6 +393,7 @@ export default function CodeAgentFlowVizPlugin({ client }: ToolPluginProps) {
       const res = await client.invoke("delete_record", { id });
       if (res.success) {
         setRecords((prev) => prev.filter((r) => r.id !== id));
+        setRecordsTotal((prev) => Math.max(0, prev - 1));
       } else {
         setError(res.error?.message ?? "Delete failed");
         setBackendOk(false);

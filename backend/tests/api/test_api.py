@@ -200,6 +200,48 @@ async def test_audit_endpoint_records_invoke(api_client):
     assert body["data"]["total"] >= 1
     assert body["data"]["records"][0]["tool_id"] == "blank_tool"
     assert body["data"]["records"][0]["success"] is True
+    assert body["data"]["records"][0]["input_data"] is None
+    assert body["data"]["records"][0]["output_data"] is None
+
+
+@pytest.mark.asyncio
+async def test_audit_details_require_operator_credential(api_client, monkeypatch):
+    await api_client.post(
+        "/api/tools/blank_tool/operations/echo", json={"payload": {"input": "audit me"}}
+    )
+    monkeypatch.setattr(settings, "audit_operator_token", "operator-secret")
+
+    res = await api_client.get("/api/audit/tool-calls?include_details=true")
+    assert res.status_code == 401
+    assert res.json()["error"]["code"] == "UNAUTHORIZED"
+
+    res = await api_client.get(
+        "/api/audit/tool-calls?include_details=true",
+        headers={"authorization": "Bearer wrong-secret"},
+    )
+    assert res.status_code == 401
+
+    res = await api_client.get(
+        "/api/audit/tool-calls?include_details=true",
+        headers={"authorization": "Bearer operator-secret"},
+    )
+    assert res.status_code == 200
+    record = res.json()["data"]["records"][0]
+    assert "audit me" in record["input_data"]
+    assert "audit me" in record["output_data"]
+
+
+@pytest.mark.asyncio
+async def test_audit_details_are_unavailable_without_operator_config(api_client, monkeypatch):
+    monkeypatch.setattr(settings, "audit_operator_token", "")
+
+    res = await api_client.get(
+        "/api/audit/tool-calls?include_details=true",
+        headers={"authorization": "Bearer any-value"},
+    )
+
+    assert res.status_code == 403
+    assert res.json()["error"]["code"] == "AUDIT_DETAILS_DISABLED"
 
 
 @pytest.mark.asyncio
@@ -330,8 +372,9 @@ async def test_rate_limit_global_429(api_client, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_audit_log_redacts_secrets(api_client):
+async def test_audit_log_redacts_secrets(api_client, monkeypatch):
     """Live credentials in an invoke payload must never reach the audit log."""
+    monkeypatch.setattr(settings, "audit_operator_token", "operator-secret")
     await api_client.post(
         "/api/tools/blank_tool/operations/echo",
         json={
@@ -342,7 +385,10 @@ async def test_audit_log_redacts_secrets(api_client):
             }
         },
     )
-    res = await api_client.get("/api/audit/tool-calls?tool_id=blank_tool&limit=1")
+    res = await api_client.get(
+        "/api/audit/tool-calls?tool_id=blank_tool&limit=1&include_details=true",
+        headers={"authorization": "Bearer operator-secret"},
+    )
     body = res.json()
     assert body["success"] is True
     record = body["data"]["records"][0]

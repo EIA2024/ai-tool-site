@@ -60,6 +60,9 @@ async def cache_set(key: str, value: Any, ttl: int = 300) -> bool:
         r = await get_redis()
         await r.set(key, json.dumps(value, ensure_ascii=False), ex=ttl)
         return True
+    except (TypeError, ValueError) as exc:
+        logger.warning("cache_set(%s) JSON serialization failed: %s", key, exc)
+        return False
     except RedisError as exc:
         logger.warning("cache_set(%s) failed: %s", key, exc)
         return False
@@ -72,6 +75,9 @@ async def cache_get(key: str) -> Any | None:
         if data is None:
             return None
         return json.loads(data)
+    except json.JSONDecodeError as exc:
+        logger.warning("cache_get(%s) returned invalid JSON: %s", key, exc)
+        return None
     except RedisError as exc:
         logger.warning("cache_get(%s) failed: %s", key, exc)
         return None

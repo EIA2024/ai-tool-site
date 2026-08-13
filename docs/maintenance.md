@@ -933,6 +933,7 @@ echo "=== 维护完成 ==="
 | `POSTGRES_PASSWORD` | postgres | 数据库密码 |
 | `POSTGRES_DB` | ai_tool_site | 数据库名 |
 | `REDIS_URL` | redis://localhost:6379/0 | Redis 连接字符串 |
+| `AUDIT_OPERATOR_TOKEN` | 空 | 读取审计原始输入/输出详情所需的 bearer token；为空时禁用详情读取 |
 | `RATE_LIMIT_ENABLED` | true | 是否启用调用频率限制 |
 | `RATE_LIMIT_PER_MINUTE` | 20 | 每 IP 每分钟允许的调用次数 |
 | `RATE_LIMIT_GLOBAL_PER_MINUTE` | 200 | 全站每分钟总调用预算（上限 DeepSeek 花费） |
@@ -960,7 +961,7 @@ echo "=== 维护完成 ==="
 
 ### 非 Docker 开发模式
 
-`npm run dev` 启动的 Vite dev server 自带 proxy，不需要 `VITE_API_BASE` 环境变量。如果前端无法连接后端，检查：
+优先从项目根目录运行 `./start.sh`（macOS）或 `start.bat`（Windows），脚本会使用 SQLite 启动后端并同时启动 Vite。手动运行 `npm run dev` 时，Vite dev server 自带 proxy，不需要 `VITE_API_BASE` 环境变量。如果前端无法连接后端，检查：
 
 1. 后端是否运行在 `localhost:8000`
 2. `vite.config.ts` 中的 proxy 配置是否正确

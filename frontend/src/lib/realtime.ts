@@ -9,8 +9,13 @@ import type {
  * `/ws/tools/{toolId}/operations/{operationId}` path.
  */
 export function realtimeUrl(toolId: string, operation: string): string {
-  const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-  return `${protocol}//${window.location.host}/ws/tools/${toolId}/operations/${operation}`;
+  const apiBase = import.meta.env.VITE_API_BASE || "/api";
+  const url = new URL(apiBase, window.location.origin);
+  url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+  url.pathname = `/ws/tools/${toolId}/operations/${operation}`;
+  url.search = "";
+  url.hash = "";
+  return url.toString();
 }
 
 let requestCounter = 0;
@@ -59,10 +64,17 @@ export class RealtimeClient implements RealtimeConnection {
     this.close();
     const ws = new WebSocket(this.url);
     this.ws = ws;
-    ws.onopen = () => this.statusHandler?.("connected");
-    ws.onclose = () => this.statusHandler?.("disconnected");
-    ws.onerror = () => this.statusHandler?.("error");
+    ws.onopen = () => {
+      if (this.ws === ws) this.statusHandler?.("connected");
+    };
+    ws.onclose = () => {
+      if (this.ws === ws) this.statusHandler?.("disconnected");
+    };
+    ws.onerror = () => {
+      if (this.ws === ws) this.statusHandler?.("error");
+    };
     ws.onmessage = (event) => {
+      if (this.ws !== ws) return;
       try {
         this.eventHandler?.(JSON.parse(event.data) as RealtimeServerEvent);
       } catch {
@@ -83,8 +95,10 @@ export class RealtimeClient implements RealtimeConnection {
     if (this.ws) {
       const ws = this.ws;
       this.ws = null;
-      // Detach onclose so an intentional close never schedules a reconnect.
+      ws.onopen = null;
       ws.onclose = null;
+      ws.onerror = null;
+      ws.onmessage = null;
       ws.close();
     }
   }
