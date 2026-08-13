@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "run_id": "WF-20260813-001-ai-tool-dock-plugins",
+  "planned": {
+    "files": [],
+    "modules": [],
+    "interfaces": {
+      "added": [],
+      "modified": [],
+      "removed": []
+    },
+    "behavior_changes": [],
+    "data_models": [],
+    "configuration": [],
+    "dependencies": [],
+    "migrations": []
+  },
+  "actual": {
+    "files": [],
+    "modules": [],
+    "interfaces": {
+      "added": [],
+      "modified": [],
+      "removed": []
+    },
+    "behavior_changes": [],
+    "data_models": [],
+    "configuration": [],
+    "dependencies": [],
+    "migrations": [],
+    "project_update_proposals": []
+  }
+}
