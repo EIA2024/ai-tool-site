@@ -10,9 +10,9 @@ from app.models.base import Base, utcnow
 class ToolCallRecord(Base):
     """Audit log entry: one row per tool invocation.
 
-    Populated automatically by the API layer on every
-    ``POST /api/tools/{tool_id}/invoke`` so operators can see usage,
-    failure rates, and raw inputs/outputs.
+    Populated automatically by the Host gateway on every
+    ``POST /api/tools/{tool_id}/operations/{operation_id}`` so operators can
+    see usage, failure rates, and raw inputs/outputs.
     """
 
     __tablename__ = "tool_call_records"

@@ -11,11 +11,11 @@
 2. [Project Map](#2-project-map)
 3. [Tool Types](#3-tool-types)
 4. [Quickstart: Add Your First Tool](#4-quickstart-add-your-first-tool)
-5. [Request-Response Tool Guide](#5-request-response-tool-guide)
-6. [Real-Time Tool Guide (WebSocket)](#6-real-time-tool-guide-websocket)
+5. [Request-Response Operation Guide](#5-request-response-operation-guide)
+6. [Real-Time Operation Guide](#6-real-time-operation-guide)
 7. [AI API Integration Guide](#7-ai-api-integration-guide)
 8. [Database & Persistence Patterns](#8-database--persistence-patterns)
-9. [Frontend Component Guide](#9-frontend-component-guide)
+9. [Frontend Plugin Guide](#9-frontend-plugin-guide)
 10. [Best Practices & Conventions](#10-best-practices--conventions)
 11. [Troubleshooting](#11-troubleshooting)
 12. [Agent Instructions](#12-agent-instructions)
@@ -24,70 +24,54 @@
 
 ## 1. Architecture Overview
 
+The site is a **single-repo Host + Plugins** architecture. The website ("Host") owns
+the Dock, dynamic routing, unified protocol, model/keys, database, rate limiting,
+audit and error handling. Tools are **auto-discovered** from
+`backend/app/tool_plugins/<tool_id>/` — adding a tool never edits `App.tsx`,
+navigation, or a central registry; a frontend rebuild + backend restart makes it live.
+
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │                      Frontend (React + Vite + TS)           │
-│  ┌─────────────────┐  ┌──────────┐  ┌───────────────────┐  │
-│  │  ToolList (nav)  │  │ ToolPage │  │ ChatToolPage (WS) │  │
-│  └────────┬────────┘  └────┬─────┘  └─────────┬─────────┘  │
-│           │                │                   │            │
-│      ┌────▼────────────────▼───────────────────▼────┐       │
-│      │          lib/api.ts  +  lib/ws.ts            │       │
-│      │          (HTTP client)   (WS client)          │       │
-│      └────────────────────┬─────────────────────────┘       │
-└───────────────────────────┼─────────────────────────────────┘
-                            │  proxy (Vite dev) / direct (prod)
-                            │  /api/*  /ws/*  /sse/*
-┌───────────────────────────┼─────────────────────────────────┐
-│                    Backend (FastAPI / Python)                │
-│  ┌────────────────────────▼─────────────────────────┐       │
-│  │              app/api/routes/tools.py              │       │
-│  │    GET  /api/tools          → list all tools      │       │
-│  │    GET  /api/tools/{id}     → tool detail         │       │
-│  │    POST /api/tools/{id}/invoke → run tool         │       │
-│  └────────────────────────┬─────────────────────────┘       │
-│                           │                                  │
-│  ┌────────────────────────▼─────────────────────────┐       │
-│  │          app/tools/                              │       │
-│  │  ┌──────────┐  ┌──────────────┐  ┌────────────┐  │       │
-│  │  │ base.py  │  │ registry.py  │  │ modules/   │  │       │
-│  │  │ (ABC)    │  │ (singleton)  │  │ (your tools)│  │       │
-│  │  └──────────┘  └──────────────┘  └────────────┘  │       │
-│  └───────────────────────────────────────────────────┘       │
-│                                                              │
-│  ┌────────────────────┐  ┌───────────────────────────────┐   │
-│  │  app/ws/handler.py │  │  app/sse/handler.py           │   │
-│  │  (WebSocket chat)  │  │  (server-sent events)         │   │
-│  └────────────────────┘  └───────────────────────────────┘   │
-│                                                              │
-│  ┌────────────────────┐  ┌───────────────────────────────┐   │
-│  │  PostgreSQL        │  │  Redis                       │   │
-│  │  chat_sessions     │  │  session/cache               │   │
-│  │  chat_messages     │  │                               │   │
-│  │  tool_call_records │  │                               │   │
-│  └────────────────────┘  └───────────────────────────────┘   │
+│  ┌──────────┐  ┌───────────┐  ┌─────────────────────────┐   │
+│  │ Dock     │  │ /tools/:id│  │ schema renderer         │   │
+│  │ ToolList │  │ ToolPage  │  │ + tool_plugins/*/index  │   │
+│  └────┬─────┘  └─────┬─────┘  └───────────┬─────────────┘   │
+│       └──────────────┴────────┬────────────┘                 │
+│                     lib/toolClient.ts  (invoke / connect)     │
+└───────────────────────────────┼─────────────────────────────┘
+                                │  /api/tools/*   /ws/tools/*
+┌───────────────────────────────┼─────────────────────────────┐
+│                      Backend (FastAPI / Python)              │
+│  ┌────────────────────────────▼───────────────────────────┐  │
+│  │ app/tool_host/  Host runtime                          │  │
+│  │  contracts.py   ToolManifest / ToolPlugin / RealtimeEvent │
+│  │  discovery.py   scans app/tool_plugins/*/plugin.py     │  │
+│  │  routes.py      GET /api/tools, POST /api/tools/{id}/operations/{op} │
+│  │  websocket.py   WS /ws/tools/{id}/operations/{op}      │  │
+│  │  runtime.py     input/output validation + dispatch     │  │
+│  │  site.py        Dock order + hidden list               │  │
+│  └────────────────────────────┬───────────────────────────┘  │
+│  ┌────────────────────────────▼───────────────────────────┐  │
+│  │ app/tool_plugins/<tool_id>/  (your tools)              │  │
+│  │   plugin.py     manifest + Pydantic handlers           │  │
+│  │   models.py / repository.py (persistence, optional)    │  │
+│  └────────────────────────────────────────────────────────┘  │
+│  app/services/ (llm, audit, cache)   app/models/ (audit)     │
+│  app/core/ (config, errors, ratelimit, redact)  app/db/      │
 └──────────────────────────────────────────────────────────────┘
 ```
 
-### Communication Protocols
+### Unified Protocol
 
 | Protocol | Path | Use Case |
 |---|---|---|
-| **REST** | `/api/*` | Request-response tools, CRUD operations, listing |
-| **WebSocket** | `/ws/*` | Real-time bidirectional (chat, streaming, live updates) |
-| **SSE** | `/sse/*` | Server-to-client event stream (progress, notifications) |
+| **REST** | `GET /api/tools`, `GET /api/tools/{id}`, `POST /api/tools/{id}/operations/{op}` | discovery + request-response operations |
+| **WebSocket** | `/ws/tools/{id}/operations/{op}` | realtime operations (streaming) |
 
-### Three-Layer Tool Architecture
-
-Every tool follows a consistent three-layer pattern:
-
-```
-Frontend Page (UI)           ← User interacts here
-      ↕  REST API or WebSocket
-Backend Tool Module           ← Business logic / AI integration
-      ↕  ORM / Service layer
-Database (PostgreSQL / Redis) ← Persistence
-```
+Every operation declares a `transport` (`request-response` or `realtime`) and
+Pydantic input/output models; the Host validates input, runs the handler,
+validates output, and commits/rolls back exactly once per request.
 
 ---
 
@@ -98,73 +82,43 @@ ai-tool-site/
 │
 ├── frontend/                          # React + Vite + TypeScript
 │   ├── src/
-│   │   ├── main.tsx                   # Entry point (BrowserRouter)
-│   │   ├── App.tsx                    # Route definitions
-│   │   ├── index.css                  # Global styles (dark theme)
-│   │   │
+│   │   ├── App.tsx                    # Routes: /, /usage, /tools/:toolId
 │   │   ├── pages/
-│   │   │   ├── ToolList.tsx           # Tool navigation (fetches from API)
-│   │   │   └── tools/                 # ★ Put your tool pages here
-│   │   │       ├── BlankToolPage.tsx  # Request-response template
-│   │   │       └── ChatToolPage.tsx   # WebSocket chat template
-│   │   │
-│   │   ├── components/
-│   │   │   ├── layout/
-│   │   │   │   ├── Layout.tsx         # Page shell (NavBar + Outlet)
-│   │   │   │   └── NavBar.tsx         # Top navigation
-│   │   │   └── chat/
-│   │   │       ├── ChatMessage.tsx    # Message bubble component
-│   │   │       └── ChatInput.tsx      # Message input with send
-│   │   │
+│   │   │   ├── ToolList.tsx           # Dock (auto from GET /api/tools)
+│   │   │   ├── ToolPage.tsx           # dynamic route → schema vs custom dispatch
+│   │   │   └── schema/SchemaTool.tsx  # generic form/result renderer
 │   │   ├── lib/
-│   │   │   ├── api.ts                 # ★ HTTP client (get/post)
-│   │   │   └── ws.ts                  # ★ WebSocket client (auto-reconnect)
-│   │   │
-│   │   └── types/
-│   │       └── index.ts               # ★ Shared TypeScript types
-│   │
-│   ├── vite.config.ts                 # Dev proxy config
-│   ├── Dockerfile                     # Multi-stage build
+│   │   │   ├── api.ts                 # get/post/del + ApiError
+│   │   │   ├── toolClient.ts          # ★ createToolClient (invoke/connect)
+│   │   │   └── realtime.ts            # RealtimeClient (frame protocol)
+│   │   ├── types/index.ts             # Host–Plugin contract types
+│   │   └── tool_plugins/              # ★ custom UI per tool
+│   │       ├── registry.ts            # import.meta.glob map (tool_id → UI)
+│   │       ├── chat_tool/index.tsx
+│   │       ├── code_agent_flow_viz/index.tsx
+│   │       └── task_decomposer/index.tsx
+│   ├── vitest.config.ts               # Vitest (jsdom)
+│   ├── vite.config.ts
 │   └── package.json
 │
 ├── backend/                           # Python + FastAPI
 │   ├── app/
-│   │   ├── main.py                    # FastAPI app entry, router includes
-│   │   │
-│   │   ├── api/
-│   │   │   ├── routes/__init__.py     # API router aggregation
-│   │   │   └── routes/tools.py        # Tool REST endpoints
-│   │   │
-│   │   ├── ws/
-│   │   │   └── handler.py             # WebSocket connection handler
-│   │   │
-│   │   ├── sse/
-│   │   │   └── handler.py             # SSE event stream
-│   │   │
-│   │   ├── tools/                     # ★ Tool system
-│   │   │   ├── base.py                # BaseTool ABC
-│   │   │   ├── registry.py            # ToolRegistry singleton
-│   │   │   └── modules/               # ★ Put your tool modules here
-│   │   │       ├── blank_tool.py      # Request-response example
-│   │   │       └── chat_tool.py       # Real-time example
-│   │   │
-│   │   ├── models/__init__.py         # SQLAlchemy ORM models
-│   │   ├── schemas/__init__.py        # Pydantic schemas
-│   │   ├── db/session.py              # Database engine & sessions
-│   │   ├── services/
-│   │   │   ├── chat_history.py        # Chat persistence CRUD
-│   │   │   └── cache.py               # Redis cache wrapper
-│   │   └── core/config.py             # Pydantic settings
-│   │
-│   ├── alembic/                       # Database migrations
-│   ├── Dockerfile
+│   │   ├── tool_host/                 # Host runtime (contracts/discovery/routes/websocket/…)
+│   │   ├── tool_plugins/              # ★ your tools
+│   │   │   ├── blank_tool/plugin.py   # hidden schema example
+│   │   │   ├── chat_tool/plugin.py    # realtime example
+│   │   │   ├── code_agent_flow_viz/plugin.py  # request-response + persistence
+│   │   │   └── task_decomposer/plugin.py      # request-response + LLM
+│   │   ├── api/routes/audit.py        # site-level audit endpoints
+│   │   ├── services/                  # llm.py, audit.py, cache.py (Host-owned)
+│   │   ├── models/                    # audit model (Host-owned)
+│   │   ├── core/                      # config, errors, ratelimit, redact
+│   │   └── db/session.py
+│   ├── alembic/                       # migrations
 │   └── pyproject.toml
 │
-├── docker-compose.yml                 # Full-stack orchestration
-├── .env.example
+├── docker-compose.yml
 └── docs/
-    ├── development.md                 # Setup instructions
-    └── ai-tool-development-handbook.md # ★ This file
 ```
 
 > Files marked with ★ are your primary extension points.
@@ -173,189 +127,146 @@ ai-tool-site/
 
 ## 3. Tool Types
 
-The framework supports two tool modes defined in `BaseTool.mode`:
+Tools are distinguished by the **transport of each operation** declared in the
+manifest — not by a top-level "mode":
 
-| Mode | Value | Communication | Use Cases |
+| Transport | Value | Communication | Use Cases |
 |---|---|---|---|
-| **Request-Response** | `"request-response"` | REST API (POST) | Text generation, image generation, data analysis, translation, summary |
-| **Real-Time** | `"realtime"` | WebSocket | Chatbots, streaming AI responses, live collaboration, progressive output |
+| **request-response** | `request-response` | REST `POST /api/tools/{id}/operations/{op}` | one-shot input → output |
+| **realtime** | `realtime` | WebSocket `/ws/tools/{id}/operations/{op}` | streaming, multi-turn |
 
-### Mode Decision Guide
+A single plugin can mix both (the chat plugin has `list_sessions` as
+request-response and `send_message` as realtime).
+
+### `ui.kind` Decision Guide
 
 ```
-Your tool needs:
-├── One-shot input → output        → request-response
-├── Multi-turn conversation        → realtime (WebSocket)
-├── Streaming / progressive output → realtime (WebSocket)
-├── Server pushes updates          → realtime (SSE)
-└── User submits, waits, sees      → request-response
+Your tool's frontend:
+├── Simple form → result      → ui.kind = "schema"   (generic renderer, no frontend code)
+├── Complex / bespoke UI      → ui.kind = "custom"   (tool_plugins/<id>/index.tsx)
 ```
+
+`ui.layout` is `"standard"` (wrapped in the site NavBar) or `"fullscreen"`
+(the plugin draws its own chrome and back link).
 
 ---
 
 ## 4. Quickstart: Add Your First Tool
 
-The fastest path to add a new AI tool. Takes ~5 minutes.
+The fastest path to add a new AI tool. Takes ~5 minutes, no Host edits.
 
-### Step 1: Backend Module
+### Step 1: Backend plugin
 
-Create `backend/app/tools/modules/translator.py`:
-
-```python
-from sqlalchemy.ext.asyncio import AsyncSession
-
-from app.tools.base import BaseTool
-from app.core.errors import ValidationError
-
-
-class TranslatorTool(BaseTool):
-    tool_id = "translator"
-    name = "AI Translator"
-    description = "Translate text between languages using AI"
-    mode = "request-response"
-
-    async def handle_invoke(self, payload: dict, db: AsyncSession) -> dict:
-        text = payload.get("text", "")
-        source_lang = payload.get("source_lang", "auto")
-        target_lang = payload.get("target_lang", "English")
-
-        # Raise a typed error for expected business failures; the router
-        # turns it into {"success": false, "error": {...}}.
-        if not text:
-            raise ValidationError("text is required", code="EMPTY_TEXT")
-
-        # ★ Replace with real AI API call (see section 7)
-        translated = f"[AI would translate: {text} from {source_lang} to {target_lang}]"
-
-        # Return the success data payload only — no envelope, no commit.
-        return {
-            "original": text,
-            "translated": translated,
-            "source_lang": source_lang,
-            "target_lang": target_lang,
-        }
-```
-
-### Step 2: Register
-
-In `backend/app/tools/registry.py`, add the import and register call:
+Create `backend/app/tool_plugins/translator/plugin.py`:
 
 ```python
-from app.tools.modules.translator import TranslatorTool
+from pydantic import BaseModel, Field
 
-tool_registry.register(TranslatorTool())
+from app.tool_host.contracts import (
+    OperationDefinition, ToolContext, ToolPlugin, ToolUi, Transport, UiKind,
+)
+
+
+class TranslateInput(BaseModel):
+    text: str = Field(min_length=1, max_length=4000)
+    target_lang: str = Field(default="English", max_length=50)
+
+
+class TranslateOutput(BaseModel):
+    original: str
+    translated: str
+    target_lang: str
+
+
+async def translate(payload: TranslateInput, context: ToolContext) -> TranslateOutput:
+    # ★ Replace with a real AI call (see section 7).
+    translated = f"[AI would translate: {payload.text} to {payload.target_lang}]"
+    return TranslateOutput(
+        original=payload.text,
+        translated=translated,
+        target_lang=payload.target_lang,
+    )
+
+
+plugin = ToolPlugin(
+    id="translator",
+    version="1.0.0",
+    name="AI Translator",
+    description="Translate text between languages using AI",
+    ui=ToolUi(kind=UiKind.SCHEMA),  # schema → generic form, no frontend code
+    operations=(
+        OperationDefinition(
+            "translate", Transport.REQUEST_RESPONSE, TranslateInput, TranslateOutput, translate
+        ),
+    ),
+)
 ```
 
-### Step 3: Frontend Page
+### Step 2: Rebuild & restart
 
-Create `frontend/src/pages/tools/TranslatorPage.tsx`:
+Restart the backend and rebuild the frontend. That's it — the tool appears in
+the Dock (auto-discovered), reachable at `/tools/translator`, and rendered by the
+generic schema form because `ui.kind = "schema"`.
+
+### Step 3 (optional): custom frontend
+
+For a complex UI, set `ui.kind = "custom"` and add
+`frontend/src/tool_plugins/translator/index.tsx`:
 
 ```tsx
 import { useState } from "react";
-import { post } from "../../lib/api";
+import type { ToolPluginProps } from "../../types";
 
-export default function TranslatorPage() {
-  const [text, setText] = useState("");
+export default function TranslatorPlugin({ client }: ToolPluginProps) {
   const [result, setResult] = useState<string | null>(null);
-  const [loading, setLoading] = useState(false);
 
-  const handleSubmit = async () => {
-    setLoading(true);
-    try {
-      const res = await post("/tools/translator/invoke", {
-        text,
-        target_lang: "English",
-      });
-      if (res.success && res.data) {
-        setResult(JSON.stringify(res.data, null, 2));
-      } else {
-        setResult(`Error: ${res.error?.message ?? "Unknown"}`);
-      }
-    } catch (err) {
-      setResult(`Request failed: ${String(err)}`);
-    } finally {
-      setLoading(false);
-    }
+  const run = async () => {
+    const res = await client.invoke("translate", { text: "Hello", target_lang: "French" });
+    setResult(res.success ? JSON.stringify(res.data, null, 2) : res.error?.message ?? "Error");
   };
 
   return (
     <div className="tool-page">
       <h2>AI Translator</h2>
-      <p>Translate text using AI.</p>
-      <div className="input-area">
-        <input value={text} onChange={(e) => setText(e.target.value)}
-               placeholder="Enter text to translate..." />
-        <button onClick={handleSubmit} disabled={loading}>
-          {loading ? "Translating..." : "Translate"}
-        </button>
-      </div>
+      <button onClick={run}>Translate</button>
       {result && <pre className="result-box">{result}</pre>}
     </div>
   );
 }
 ```
 
-### Step 4: Add Route
-
-In `frontend/src/App.tsx`:
-
-```tsx
-import TranslatorPage from "./pages/tools/TranslatorPage";
-
-// Inside <Routes>:
-<Route path="/tools/translator" element={<TranslatorPage />} />
-```
-
-### ✅ Done
-
-The new tool will:
-- Appear in the tool list on the home page (auto-discovered from backend)
-- Be accessible at `http://localhost:5173/tools/translator`
+The custom component is lazy-loaded by `import.meta.glob` and reached through the
+single `/tools/:toolId` route — no `App.tsx` or `NavBar` edits.
 
 ---
 
-## 5. Request-Response Tool Guide
+## 5. Request-Response Operation Guide
 
-### Backend: BaseTool Contract
+### Backend: OperationDefinition contract
 
 ```python
-class BaseTool(ABC):
-    tool_id: str          # Unique identifier (used in URLs, must match frontend route)
-    name: str             # Display name in tool list
-    description: str      # Description shown in tool list
-    mode: str             # "request-response" or "realtime"
-
-    async def handle_invoke(self, payload: dict, db: AsyncSession) -> dict:
-        """Execute the tool for one request.
-
-        Args:
-            payload: the tool-specific payload from the client.
-            db:     request-scoped async session (injected — never create
-                    your own, never commit here).
-
-        Returns:
-            The success data payload only. The API layer wraps it in the
-            {"success": true, "data": ...} envelope.
-        """
-        ...
+OperationDefinition(
+    "translate",                        # operation id (snake_case)
+    Transport.REQUEST_RESPONSE,         # transport
+    TranslateInput,                     # Pydantic input model (validated by Host)
+    TranslateOutput,                    # Pydantic output model (validated by Host)
+    translate,                          # async handler: (input, ToolContext) -> output
+)
 ```
 
-### Response Convention
-
-Return the data payload only from `handle_invoke` — no envelope:
+The handler receives `context.db: AsyncSession` (injected — never create your
+own, never commit here). Return the output model directly; the Host wraps it in
+`{"success": true, "data": {...}}`. Raise a typed error for expected failures.
 
 ```python
-# Success — return this dict directly:
-{
-    "result": "...",           # Primary output
-    "metadata": {...},         # Optional: extra info
-}
+# Success — return the output model:
+return TranslateOutput(original=..., translated=..., target_lang=...)
 
-# Error — raise a typed error instead of returning a failure dict:
+# Error — raise a typed error instead of returning a failure:
 raise ValidationError("text is required", code="EMPTY_TEXT")
 ```
 
-The router converts both cases into the standard JSON envelope:
+The Host converts both into the standard envelope:
 
 ```json
 {"success": true,  "data": {...}}
@@ -364,135 +275,68 @@ The router converts both cases into the standard JSON envelope:
 
 Available typed errors (see `app/core/errors.py`): `ValidationError`,
 `NotFoundError`, `ProviderError` (upstream AI/API failure), `RateLimitError`.
-`InternalError` (HTTP 500) is reserved for genuine server bugs — never raise
-it from a tool.
+`InternalError` (HTTP 500) is reserved for genuine server bugs — never raise it
+from a handler.
 
-### Frontend: Calling the Tool
+### Frontend: calling an operation
 
-Use the `invokeTool()` helper from `lib/api.ts` (it wraps the payload in the
-`{ "payload": ... }` request body automatically):
+Custom plugins receive a bound `ToolClient` and call `invoke(operation, payload)`
+— they never build URLs:
 
-```typescript
-import { invokeTool } from "../../lib/api";
-
-// POST /api/tools/{tool_id}/invoke
-const res = await invokeTool("translator", {
-    text: "Hello world",
-    target_lang: "French",
-});
-
-if (res.success) {
-    console.log(res.data);  // typed as T
-} else {
-    console.error(res.error?.message);
-}
+```tsx
+const res = await client.invoke("translate", { text: "Hello", target_lang: "French" });
+if (res.success) console.log(res.data);
+else console.error(res.error?.message);
 ```
 
-The POST URL pattern is always `/tools/{tool_id}/invoke` (the `/api` prefix is handled by the client).
+`invoke` POSTs `{ "payload": {...} }` to `/api/tools/{id}/operations/{op}`.
 
 ---
 
-## 6. Real-Time Tool Guide (WebSocket)
+## 6. Real-Time Operation Guide
 
-### Backend: WebSocket Handler Pattern
+### Backend: realtime handler
 
-The existing `ws/handler.py` provides a general-purpose chat WebSocket. For tools that need custom WebSocket behavior, create a new endpoint.
-
-Example — add a streaming AI tool WebSocket at `/ws/stream`:
-
-```python
-# backend/app/ws/stream_handler.py
-import json
-import asyncio
-import logging
-
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect
-
-logger = logging.getLogger(__name__)
-router = APIRouter()
-
-
-@router.websocket("/stream")
-async def stream_websocket(websocket: WebSocket):
-    await websocket.accept()
-    try:
-        while True:
-            data = await websocket.receive_text()
-            prompt = json.loads(data).get("prompt", "")
-
-            # Simulate streaming AI response
-            for token in prompt.split():
-                await websocket.send_text(json.dumps({
-                    "type": "token",
-                    "content": token + " ",
-                }))
-                await asyncio.sleep(0.1)  # Simulate delay
-
-            await websocket.send_text(json.dumps({
-                "type": "done",
-                "content": "",
-            }))
-    except WebSocketDisconnect:
-        logger.info("Client disconnected")
-```
-
-Then register the router in `backend/app/main.py`:
+A realtime operation's handler is an **async generator** that `yield`s
+`RealtimeEvent`s. The Host streams them over WebSocket and enforces the frame
+protocol.
 
 ```python
-from app.ws.stream_handler import router as stream_router
-app.include_router(stream_router, prefix="/ws")
+from app.tool_host.contracts import RealtimeEvent
+
+async def stream_tokens(payload: StreamInput, context: ToolContext):
+    request_id = context.request_id or ""
+    yield RealtimeEvent(type="progress", request_id=request_id, data={"stage": "start"})
+    async for delta in produce_tokens(payload.prompt):
+        yield RealtimeEvent(type="delta", request_id=request_id, data={"content": delta})
+    yield RealtimeEvent(type="result", request_id=request_id, data={"done": True})
 ```
 
-### Frontend: Using WsClient
+The gateway emits a `ready` frame on connect, then for each `invoke` streams the
+generator's `progress` / `delta` / `result` events, validates the `result` against
+the output model, commits once, and audits. On a typed error it sends an `error`
+frame and keeps the socket open.
 
-The `WsClient` class handles connection lifecycle, exponential backoff
-reconnect, and optional session resume:
+### Frontend: using `client.connect`
 
-```typescript
-import { useRef, useState } from "react";
-import { WsClient } from "../../lib/ws";
-import type { WsMessage } from "../../types";
-
-export default function StreamPage() {
-  const [messages, setMessages] = useState<string[]>([]);
-  const [status, setStatus] = useState("disconnected");
-  const clientRef = useRef<WsClient | null>(null);
-
-  const connect = (sessionId?: string) => {
-    const client = new WsClient(
-      (msg) => setMessages((prev) => [...prev, msg.content]),
-      setStatus
-    );
-    clientRef.current = client;
-    client.connect(sessionId);   // pass ?session_id= to resume a chat session
-  };
-
-  const sendPrompt = (text: string) => {
-    clientRef.current?.send(text);
-  };
-
-  const disconnect = () => clientRef.current?.disconnect();
-
-  // ...render connect button, messages, input
-}
+```tsx
+const conn = client.connect("stream");
+conn.onEvent((event) => {
+  if (event.type === "delta") append(event.data.content);
+  else if (event.type === "result") finish(event.data);
+  else if (event.type === "error") show(event.data.message);
+});
+conn.onStatus((status) => setStatus(status));
+conn.open();
+conn.send({ prompt: "hello" });  // sends {type:"invoke", request_id, payload}
 ```
 
-The `WsClient` auto-reconnects with backoff (1s → 30s max) after an
-unexpected close; call `disconnect()` on unmount to stop it.
+### WebSocket frame protocol
 
-### WebSocket Message Envelope
-
-```typescript
-// Frontend sends:
-{ "type": "message", "content": "user input" }
-
-// Backend responds:
-{ "type": "connected", "session_id": "..." }   // first frame, before any echo
-{ "type": "message",
-  "content": "Echo: user input",
-  "sender": "assistant",
-  "timestamp": "2026-07-25T12:00:00Z" }
-{ "type": "error", "message": "content exceeds 10000 chars" }
+```
+client → server:  { "type": "invoke", "request_id": "...", "payload": {...} }
+server → client:  { "type": "ready", "tool_id": "...", "operation_id": "..." }
+                  { "type": "progress" | "delta" | "result" | "error", "request_id": "...", "data": {...} }
 ```
 
 ---
@@ -502,284 +346,145 @@ unexpected close; call `disconnect()` on unmount to stop it.
 The project talks to models through a **provider abstraction layer**
 (`backend/app/services/llm.py`). Providers are config-driven: the default is
 DeepSeek, and adding another OpenAI-compatible provider (OpenAI, GLM, Moonshot,
-Kimi, Qwen, ...) is one `LLM_PROVIDERS` entry plus one Settings field for its
-API key — no client code (see "Adding a model provider" below). New tools call
-`chat_completion` (request-response) or `chat_completion_stream` (WebSocket)
-instead of talking to httpx directly. A complete, production-shaped reference
-is the [Task Decomposer](backend/app/tools/modules/task_decomposer.py) tool:
-prompt building lives in `task_decomposer_client.py`, upstream failures are
-caught as `ProviderError` and re-wrapped as the HTTP-layer error type, and the
-response is validated with Pydantic.
+Kimi, Qwen, ...) is one `LLM_PROVIDERS` entry plus one Settings field for its API
+key — no client code. New tools call `chat_completion` (request-response) or
+`chat_completion_stream` (realtime) instead of talking to httpx directly. A
+complete, production-shaped reference is the
+[Task Decomposer](backend/app/tool_plugins/task_decomposer/client.py) plugin:
+prompt building lives in `client.py`, upstream failures are caught as the shared
+`ProviderError` and re-wrapped as the HTTP-layer error type, and the response is
+validated with Pydantic.
 
-### Pattern: Direct API Call (Request-Response)
+### Pattern: request-response
 
 ```python
 from app.core.errors import ProviderError as HttpProviderError, ValidationError
 from app.services.llm import ProviderError as LlmProviderError, chat_completion, get_default_model
 
 
-class SummarizerTool(BaseTool):
-    tool_id = "summarizer"
-    name = "AI Summarizer"
-    description = "Summarize text using AI"
-    mode = "request-response"
-
-    async def handle_invoke(self, payload: dict, db: AsyncSession) -> dict:
-        text = payload.get("text", "")
-        if not text:
-            raise ValidationError("text is required", code="EMPTY_TEXT")
-
-        model = payload.get("model") or get_default_model()
-
-        try:
-            summary = await chat_completion(
-                [
-                    {"role": "system", "content": "Summarize the following text."},
-                    {"role": "user", "content": text},
-                ],
-                model,
-                response_format={"type": "json_object"},
-                temperature=0.2,
-                max_tokens=2200,
-            )
-        except LlmProviderError as exc:
-            # Re-raise as the HTTP-layer ProviderError so the router wraps it
-            # in the standard envelope.
-            raise HttpProviderError(str(exc), code="LLM_ERROR") from exc
-
-        return {"summary": summary, "model": model}
+async def summarize(payload: SummarizeInput, context: ToolContext) -> SummarizeOutput:
+    if not payload.text:
+        raise ValidationError("text is required", code="EMPTY_TEXT")
+    model = payload.model or get_default_model()
+    try:
+        summary = await chat_completion(
+            [{"role": "system", "content": "Summarize the following text."},
+             {"role": "user", "content": payload.text}],
+            model,
+            response_format={"type": "json_object"},
+            temperature=0.2,
+            max_tokens=2200,
+        )
+    except LlmProviderError as exc:
+        raise HttpProviderError(str(exc), code="LLM_ERROR") from exc
+    return SummarizeOutput(summary=summary, model=model)
 ```
 
 Key rules:
 
-- **Never return an error dict** — raise the HTTP-layer `ProviderError` (or
-  `ValidationError` for bad input). The router converts it into the standard
-  envelope.
-- **Two-layer error model** — the shared client raises
-  `app.services.llm.ProviderError` (carries `.retryable`); tools catch it and
-  re-raise as `app.core.errors.ProviderError` with `code="LLM_ERROR"`. Don't
-  let either leak raw.
-- **Validate the model response** with a Pydantic schema before using it
-  (see `ModelTaskAnalysis` in `task_decomposer_client.py`).
+- **Never return an error dict** — raise `ValidationError` / `ProviderError`.
+- **Two-layer error model** — `app.services.llm.ProviderError` (carries
+  `.retryable`) is caught and re-raised as `app.core.errors.ProviderError` with
+  `code="LLM_ERROR"`. Don't let either leak raw.
+- **Validate the model response** with a Pydantic schema (see
+  `task_decomposer/client.py`).
 
-### Pattern: Streaming via WebSocket
+### Pattern: streaming
 
-For streaming AI responses (ChatGPT-style), use WebSocket to push tokens
-progressively. The existing `ws/handler.py` shows the session/persistence
-pattern; a streaming tool sends `{"type": "token", "content": ...}` frames
-from `chat_completion_stream` and finishes with a `done` frame:
+Realtime operations wrap `chat_completion_stream` and yield `delta` events — see
+`tool_plugins/chat_tool/plugin.py::send_message` for the session/persistence
+pattern, including the `finally: await stream.aclose()` teardown.
 
-```python
-import json
-from fastapi import WebSocket
+### Environment variables
 
-from app.services.llm import chat_completion_stream, get_default_model
-
-
-async def stream_ai_response(websocket: WebSocket, prompt: str, model: str = ""):
-    stream = chat_completion_stream(
-        [{"role": "user", "content": prompt}],
-        model or get_default_model(),
-    )
-    try:
-        async for delta in stream:
-            await websocket.send_text(json.dumps({"type": "token", "content": delta}))
-    finally:
-        # Always close the generator so its transport is released, even if the
-        # client drops mid-stream.
-        await stream.aclose()
-
-    await websocket.send_text(json.dumps({"type": "done", "content": ""}))
-```
-
-### Environment Variables for AI APIs
-
-Add the API key to `backend/.env` (never commit to git) — or the repo root
-`.env` used by Docker Compose:
-
-```ini
-# backend/.env
-DEEPSEEK_API_KEY=sk-...
-```
-
-The registry defaults to DeepSeek only; everything the app knows about models
-comes from `Settings.llm_providers` (`backend/app/core/config.py`). The
-frontend reads the model list from `GET /api/config` (fields `models` /
-`default_model`), so a new model or provider added here is picked up without a
+Add the API key to `backend/.env` (never commit), e.g. `DEEPSEEK_API_KEY=sk-...`.
+Everything the app knows about models comes from `Settings.llm_providers`
+(`backend/app/core/config.py`); the frontend reads `GET /api/config`
+(`models` / `default_model`), so a new model/provider is picked up without a
 frontend rebuild.
 
-### Adding a Model Provider
+### Adding a model provider
 
-Adding an OpenAI-compatible provider is **configuration only — no code
-change**. Two steps:
+Configuration only — no code change:
 
-1. **Declare its key** as a new Settings field (e.g. `glm_api_key: str = ""`
-   → `GLM_API_KEY` in `.env`), next to `deepseek_api_key` in
-   `backend/app/core/config.py`.
-2. **Add it to the registry** by setting `LLM_PROVIDERS` (JSON list) in
-   `backend/.env` — or the root `.env` for Docker Compose. Each entry:
+1. Declare its key as a Settings field (e.g. `glm_api_key: str = ""`).
+2. Add it to `LLM_PROVIDERS` (JSON list) with `id` / `name` / `base_url` /
+   `api_key_env` / `models` / `default_model` / `supports_thinking`.
 
-   ```json
-   [
-     {
-       "id": "glm",
-       "name": "Zhipu GLM",
-       "base_url": "https://open.bigmodel.cn/api/paas",
-       "api_key_env": "glm_api_key",
-       "models": ["glm-4-plus", "glm-4-air"],
-       "default_model": "glm-4-plus",
-       "max_output_tokens": 8192,
-       "context_length": 128000,
-       "session_key_prefix": "",
-       "supports_thinking": false
-     }
-   ]
-   ```
+Restart the backend; `GET /api/config` advertises the new models.
 
-   - `base_url` is scheme + host; `/chat/completions` is appended.
-   - `api_key_env` names the Settings field holding that provider's key.
-   - `supports_thinking` gates the `thinking` / `reasoning_effort` params
-     (DeepSeek V4 only today; set `false` for providers without the extension).
-   - `session_key_prefix` validates transient keys (DeepSeek = `"sk-"`;
-     `""` accepts any non-empty key).
-   - To keep DeepSeek too, include **both** entries in the list, and keep
-     `LLM_DEFAULT_PROVIDER=deepseek` (or point it at the new provider).
-
-3. Restart the backend. `GET /api/config` and the chat `connected` frame now
-   advertise the new models automatically.
-
-Non-OpenAI wire formats (Anthropic Messages, Gemini `generateContent`) are not
-implemented yet; the seam is `ProviderConfig.api_style` in
-`backend/app/services/llm.py` (`_chat_url` / `_chat_headers`) — add a branch
-there and the callers never change.
-
-### Using the Cache Layer
+### Cache layer
 
 ```python
 from app.services.cache import cache_get, cache_set
-
-# Cache AI response for 1 hour
-cache_key = f"summary:{hash(text)}"
-cached = await cache_get(cache_key)
-if cached:
-    return cached
-
-result = await call_ai_api(text)
-await cache_set(cache_key, result, ttl=3600)
-return result
+cached = await cache_get(key)
+if cached: return cached
+result = await call_ai_api(...)
+await cache_set(key, result, ttl=3600)
 ```
 
 ---
 
 ## 8. Database & Persistence Patterns
 
-### Existing Models
+### Existing models
 
-```python
-# backend/app/models/__init__.py
+Host-owned: `ToolCallRecord` (`app/models/audit.py`). Plugin-owned models live in
+their plugin directory (e.g. `tool_plugins/chat_tool/models.py` for
+`ChatSession` / `ChatMessage`, `tool_plugins/code_agent_flow_viz/models.py` for
+`AgentPracticeRecord`).
 
-class ChatSession(Base):
-    """A conversation session. Each WebSocket chat creates one."""
-    __tablename__ = "chat_sessions"
-    id, title, tool_id, created_at, updated_at
+### Adding a model
 
-class ChatMessage(Base):
-    """A single message in a chat session."""
-    __tablename__ = "chat_messages"
-    id, session_id, role, content, created_at
-
-class ToolCallRecord(Base):
-    """Log of tool invocation (for audit/history)."""
-    __tablename__ = "tool_call_records"
-    id, tool_id, input_data, output_data, success, created_at
-```
-
-### Adding a New Model
-
-For tool-specific data, add models to `backend/app/models/__init__.py`:
-
-```python
-class TranslationRecord(Base):
-    __tablename__ = "translation_records"
-
-    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
-    source_text: Mapped[str] = mapped_column(Text, nullable=False)
-    translated_text: Mapped[str] = mapped_column(Text, nullable=False)
-    source_lang: Mapped[str] = mapped_column(String(50))
-    target_lang: Mapped[str] = mapped_column(String(50))
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
-```
-
-Then create an Alembic migration:
+Add tool-specific models **inside your plugin directory** (they are registered on
+`Base.metadata` when plugin discovery imports the plugin), then write an Alembic
+migration — discovery does not auto-create tables:
 
 ```bash
 cd backend
-alembic revision --autogenerate -m "add translation_records"
+alembic revision -m "add translation_records"
+# Write the migration by hand (see 002_add_agent_practice_records.py)
 alembic upgrade head
 ```
 
-### Recording Tool Calls
+### Recording tool calls
 
-Every tool invocation is audited **automatically** by the API layer
-(`app/api/routes/tools.py` → `app/services/audit.py::log_tool_call`): the
-input payload, output data, and success flag are written to
-`tool_call_records` on every call — success or failure. You can view the log
-via `GET /api/audit/tool-calls`. Tools never write audit records themselves.
+Every operation is audited **automatically** by the Host
+(`app/tool_host/gateway.py` → `app/services/audit.py::log_tool_call`): input,
+output, and success flag are written to `tool_call_records` on every call. View
+via `GET /api/audit/tool-calls`. Handlers never write audit records themselves.
 
-For tool-specific data (your own tables), use the **injected** `db` session
-and **never commit** inside the tool:
-
-```python
-# In your tool's handle_invoke — db is injected, no session factory needed:
-record = TranslationRecord(
-    source_text=text,
-    translated_text=translated,
-    source_lang=source_lang,
-    target_lang=target_lang,
-)
-db.add(record)
-# No await db.commit() here! The router commits exactly once per request.
-```
-
-This is the unit-of-work rule: services and tools `add`/`flush`, the router
-`commit`s once, and any expected failure (typed error) triggers a single
-`rollback`. If your tool must swallow a failure and keep going (e.g. a
-best-effort history save), do `await db.rollback()` explicitly first — see
-`_analyze_task` in `task_decomposer.py`.
+For your own tables, use the **injected** `context.db` and **never commit**
+inside the handler — the Host commits once per request. If your handler must
+swallow a failure and keep going (e.g. best-effort history save), call
+`await context.db.rollback()` explicitly first — see
+`tool_plugins/task_decomposer/plugin.py::analyze_task`.
 
 ---
 
-## 9. Frontend Component Guide
+## 9. Frontend Plugin Guide
 
-### Available Components
+### Site-level pieces (Host)
 
-| Component | File | Usage |
+| Piece | File | Role |
 |---|---|---|
-| `Layout` | `components/layout/Layout.tsx` | Page shell with NavBar |
-| `NavBar` | `components/layout/NavBar.tsx` | Top navigation bar (add tool links here) |
-| `ChatMessage` | `components/chat/ChatMessage.tsx` | Message bubble (sender + content) |
-| `ChatInput` | `components/chat/ChatInput.tsx` | Text input with Send button + Enter to send |
+| `ToolList` | `pages/ToolList.tsx` | Dock, generated from `GET /api/tools` |
+| `ToolPage` | `pages/ToolPage.tsx` | dynamic `/tools/:toolId`, schema vs custom dispatch |
+| `SchemaTool` | `pages/schema/SchemaTool.tsx` | generic form/result renderer |
+| `PluginMissing` | `pages/PluginMissing.tsx` | compatibility error when a custom tool has no UI |
+| `toolClient` | `lib/toolClient.ts` | `createToolClient` → `invoke` / `connect` |
+
+### Custom plugin contract
+
+A custom plugin's `tool_plugins/<id>/index.tsx` default-exports a component
+receiving `{ client, manifest }`. It calls `client.invoke(operation, payload)` or
+`client.connect(operation)` and is lazy-loaded by `import.meta.glob`.
 
 ### Styling
 
-Use CSS classes from `index.css`. Available utility classes:
-
-- `.tool-page` — standard tool page wrapper
-- `.input-area` — input + button row
-- `.result-box` — preformatted output display
-- `.chat-messages` — scrollable message container
-- `.chat-message` — single message (.message-user / .message-bot)
-- `.status-text` — centered status text
-- `.ws-status` — WebSocket connection status badge (.status-connected / .status-disconnected)
-
-### TypeScript Types
-
-```typescript
-// types/index.ts
-interface ToolMeta { tool_id, name, description, mode, config? }
-interface ApiResponse<T> { success, data?, error? }
-interface WsMessage { type, content, sender, timestamp, session_id? }
-```
+Use the classes in `src/index.css`. Common ones: `.tool-page`, `.input-area`,
+`.result-box`, `.status-text`, `.error-text`, plus the `viz-*` / `td-*` scoped
+themes already defined for the flow visualizer and task decomposer.
 
 ---
 
@@ -787,30 +492,26 @@ interface WsMessage { type, content, sender, timestamp, session_id? }
 
 ### Backend
 
-- **One file per tool module** in `backend/app/tools/modules/`
-- **tool_id** uses `snake_case` (e.g., `image_generator`, `code_reviewer`)
-- **Keep `handle_invoke` focused**: validate input, call AI/external API, return the data payload
-- **Error handling**: raise typed errors (`ValidationError`, `NotFoundError`, `ProviderError`) instead of returning failure dicts; never let raw exceptions escape
-- **DB access**: use the injected `db: AsyncSession`; never open your own session and never `commit` inside a tool (unit-of-work — the router commits once)
-- **Async IO**: use `httpx.AsyncClient` for HTTP calls, not `requests`
+- **One plugin directory per tool** in `backend/app/tool_plugins/<tool_id>/`
+- **`id`** uses `snake_case` (e.g. `image_generator`, `code_reviewer`)
+- **Keep handlers focused**: validate (via Pydantic), call AI/external API, return the output model
+- **Error handling**: raise typed errors (`ValidationError`, `NotFoundError`, `ProviderError`) instead of returning failure dicts
+- **DB access**: use the injected `context.db`; never open your own session and never `commit` inside a handler (unit-of-work — the Host commits once)
+- **Async IO**: use `httpx` (via `app.services.llm`), not `requests`
 - **Secrets**: never hardcode API keys; use `Settings` from `config.py`
 
 ### Frontend
 
-- **One file per tool page** in `frontend/src/pages/tools/`
-- **Route path** matches `tool_id` (e.g., `tool_id = "code_reviewer"` → route `/tools/code_reviewer`)
-- **Use `lib/api.ts`** for REST calls, **`lib/ws.ts`** for WebSocket
+- **One directory per tool UI** in `frontend/src/tool_plugins/<tool_id>/`
+- **Use the bound `ToolClient`** (`client.invoke` / `client.connect`), never hand-build URLs
 - **Loading state**: always track loading state to disable buttons during requests
 - **Error display**: show `res.error?.message` when a request fails
 
 ### Adding Tools Checklist
 
-- [ ] Backend module created in `tools/modules/`
-- [ ] Registered in `tools/registry.py`
-- [ ] Frontend page created in `pages/tools/`
-- [ ] Route added in `App.tsx`
-- [ ] (Optional) NavBar link added in `components/layout/NavBar.tsx`
-- [ ] (Optional) Database model and migration for tool-specific data
+- [ ] `backend/app/tool_plugins/<id>/plugin.py` with a `ToolPlugin` (manifest + operations)
+- [ ] (Optional) `frontend/src/tool_plugins/<id>/index.tsx` for `ui.kind = "custom"`
+- [ ] (Optional) DB model inside the plugin + Alembic migration
 - [ ] Backend starts without error: `python -c "from app.main import app"`
 - [ ] Frontend builds without error: `npm run build`
 
@@ -820,31 +521,21 @@ interface WsMessage { type, content, sender, timestamp, session_id? }
 
 | Symptom | Likely Cause | Fix |
 |---|---|---|
-| Backend crashes on start | Import error in config.py | Check `from app.core.config import settings` works |
-| Tool not appearing in list | Not registered in `registry.py` | Add `tool_registry.register(YourTool())` |
-| Frontend can't reach backend | Docker not running / CORS | Use Vite proxy for dev; check `docker compose ps` |
-| WebSocket disconnects | ConnectionManager not tracking | Ensure `connect()`/`disconnect()` are paired |
-| Alembic migration fails | Async URL in sync context | `env.py` auto-strips `+asyncpg` — check `alembic.ini` |
-| `ModuleNotFoundError` for tools | Missing `__init__.py` | All module directories need `__init__.py` |
-| Docker frontend shows blank page | Volume mount overrides dist | Use `docker compose up --build` to rebuild |
+| Backend crashes on start | invalid manifest / duplicate id / handler-transport mismatch | discovery fails fast — read the startup error |
+| Tool not appearing in Dock | hidden in `tool_host/site.py` or plugin failed discovery | check `HIDDEN_TOOL_IDS` / backend logs |
+| Frontend can't reach backend | Docker not running / CORS | use Vite proxy for dev; check `docker compose ps` |
+| Custom tool shows "没有找到对应的插件" | `ui.kind = "custom"` but no `tool_plugins/<id>/index.tsx` | add the UI entry, or set `ui.kind = "schema"` |
+| Alembic migration fails | async URL in sync context | `env.py` auto-strips `+asyncpg` |
+| `ModuleNotFoundError` for a plugin | missing `__init__.py` / plugin.py | each plugin dir needs `__init__.py` + `plugin.py` exporting `plugin` |
 
-### Quick Diagnostic Commands
+### Quick diagnostic commands
 
 ```bash
-# Backend health
 curl http://localhost:8000/api/health
-
-# Tool list
 curl http://localhost:8000/api/tools
-
-# Frontend build check
-cd frontend && npm run build
-
-# Python import check
 cd backend && python -c "from app.main import app; print('OK')"
-
-# Lint
-cd backend && ruff check .
+cd frontend && npm run build
+cd frontend && npm run test
 ```
 
 ---
@@ -853,47 +544,30 @@ cd backend && ruff check .
 
 > This section is for AI Agents (Claude Code, Codex, etc.) working on this project.
 
-### Project Entry Points
+### Key architectural invariants
 
-When starting work on this project, read in this order:
+- **Plugins are auto-discovered** from `backend/app/tool_plugins/*/plugin.py`; the Dock and routes are generated from `GET /api/tools`. Registration is not explicit.
+- **`ToolPlugin` is the contract**: `id` (snake_case), `version`, `ui` (`kind`/`layout`), and a tuple of `OperationDefinition`s. Each operation declares `transport` + Pydantic input/output models + a handler.
+- **Handlers never commit** — the Host validates input, runs the handler, validates output, commits once, and audits.
+- **realtime handlers are async generators** yielding `RealtimeEvent`s; request-response handlers are coroutines returning the output model.
+- **Frontend plugins receive a bound `ToolClient`** and call `invoke(operation, payload)` / `connect(operation)`; custom UIs are lazy-loaded via `import.meta.glob` through the single `/tools/:toolId` route.
 
-```text
-1. CLAUDE.md               — Workflow protocol instructions
-2. AGENTS.md               — Cross-agent workflow bootstrap
-3. .workflow/              — Prompt-driven workflow system
-4. docs/development.md     — Setup guide
-5. docs/ai-tool-development-handbook.md  — This file
-```
+### Adding a tool (agent workflow)
 
-### Understanding the Codebase
+1. **Clarify intent**: transport (request-response vs realtime), inputs/outputs, AI API requirements, frontend complexity.
+2. **Create the plugin dir** `backend/app/tool_plugins/<id>/` with `plugin.py` (manifest + handlers).
+3. **(Optional, persistence)** add `models.py`/`repository.py` + an Alembic migration.
+4. **(Optional, custom UI)** add `frontend/src/tool_plugins/<id>/index.tsx` (schema tools need none).
+5. **Verify**: `python -m pytest -q`, `alembic check`, `npm run test`, `npm run build`.
 
-Key architectural invariants:
+### Templates to copy
 
-- **The tool registry is the central hub**: `backend/app/tools/registry.py` lists all available tools. The frontend tool list is dynamically generated from the backend `/api/tools` endpoint, so registration alone makes a tool visible.
-- **`BaseTool` is the contract**: every tool module must subclass `BaseTool` and implement `handle_invoke()`. The `tool_id` field must be a unique `snake_case` string.
-- **Frontend routes must match `tool_id`**: the route path in `App.tsx` must use underscores (e.g., `tool_id = "my_tool"` → route `/tools/my_tool`).
-- **Two communication modes**: `request-response` tools use REST POST; `realtime` tools use WebSocket. Choose based on whether the interaction is single-turn or multi-turn/streaming.
-
-### Adding a Tool (Agent Workflow)
-
-When asked to add a new AI tool:
-
-1. **Clarify intent**: Determine tool type (request-response or realtime), inputs, outputs, AI API requirements.
-2. **Create backend module**: New file in `backend/app/tools/modules/`.
-3. **Register**: Add import and `register()` call in `registry.py`.
-4. **Create frontend page**: New file in `frontend/src/pages/tools/`.
-5. **Add route**: Add `<Route>` in `App.tsx`.
-6. **Verify**: Run `cd backend && python -c "from app.main import app"` and `cd frontend && npm run build`.
-
-### Common Patterns to Follow
-
-- Each tool is self-contained: one backend module + one frontend page
-- Use existing examples as templates (`BlankToolPage` for request-response, `ChatToolPage` for real-time)
-- API keys and environment-specific config go in `backend/app/core/config.py` using `pydantic-settings`
-- Database operations use the **injected** async session (`db: AsyncSession` parameter of `handle_invoke`) — never `app.db.session.async_session_factory` inside a tool, and never commit there
-- Cache operations use `app.services.cache.cache_get/cache_set`
+- `blank_tool/plugin.py` — hidden schema example (request-response `echo`)
+- `code_agent_flow_viz/plugin.py` — request-response + persistence (CRUD operations)
+- `chat_tool/plugin.py` — realtime (`send_message` async generator) + session CRUD
+- `task_decomposer/plugin.py` — request-response + LLM (provider error wrapping)
 
 ---
 
-*Last updated: 2026-07-25*
+*Last updated: 2026-08-13*
 *Maintainer: EIA2024*

@@ -5,6 +5,10 @@ from sqlalchemy import engine_from_config, pool
 
 from alembic import context
 from app.models import Base
+from app.tool_host.discovery import get_registry
+
+# Discovery imports every plugin's ORM models before Alembic reads metadata.
+get_registry()
 
 config = context.config
 if config.config_file_name is not None:

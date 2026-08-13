@@ -16,6 +16,13 @@ from sqlalchemy.pool import StaticPool
 from app.db.session import get_db
 from app.main import app
 from app.models import Base
+from app.tool_host.discovery import get_registry
+
+# Import every plugin's ORM models before tables are created. This mirrors
+# alembic/env.py: plugin discovery is what registers ChatSession/ChatMessage,
+# AgentPracticeRecord and TaskAnalysisHistory on Base.metadata. Without it the
+# in-memory SQLite schema would only contain the Host-owned audit table.
+get_registry()
 
 TEST_DB_URL = "sqlite+aiosqlite:///:memory:"
 engine = create_async_engine(

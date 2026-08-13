@@ -189,7 +189,6 @@ pip install --upgrade fastapi
 | `redis` | 5.1.0 | Redis 客户端 |
 | `pydantic` | 2.0 | 数据验证 |
 | `pydantic-settings` | 2.0 | 配置管理 |
-| `sse-starlette` | 2.1.0 | SSE 支持 |
 
 ```bash
 # 更新依赖版本的推荐流程
@@ -406,8 +405,8 @@ redis:
 
 | 键模式 | 用途 | TTL |
 |---|---|---|
-| `tool:{tool_id}:result:{hash}` | AI API 响应缓存 | 300s（可调整） |
-| `ws:session:{session_id}` | WebSocket 元数据 | 会话期间 |
+| `rl:{key}` | 限流计数器（rate limiter） | 60s |
+| 自定义键 | 插件/服务通过 `cache_get`/`cache_set` 的缓存 | 调用方指定 |
 
 ---
 
@@ -548,14 +547,6 @@ server {
         proxy_http_version 1.1;
         proxy_set_header Upgrade $http_upgrade;
         proxy_set_header Connection "upgrade";
-        proxy_set_header Host $host;
-    }
-
-    # SSE
-    location /sse/ {
-        proxy_pass http://backend:8000;
-        proxy_buffering off;
-        proxy_cache off;
         proxy_set_header Host $host;
     }
 }

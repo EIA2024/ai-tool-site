@@ -2,7 +2,7 @@
 
 import pytest
 
-from app.services.chat_history import (
+from app.tool_plugins.chat_tool.repository import (
     add_message,
     auto_title_on_first_message,
     create_session,

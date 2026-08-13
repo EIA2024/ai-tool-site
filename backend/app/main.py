@@ -8,12 +8,14 @@ from app.api.routes import router as api_router
 from app.core.config import settings
 from app.core.errors import AppError, InternalError
 from app.services.cache import close_redis
-from app.ws.handler import router as ws_router
+from app.tool_host.discovery import get_registry
+from app.tool_host.websocket import router as ws_router
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Startup
+    # Import and validate every built-in plugin before serving traffic.
+    get_registry()
     yield
     # Shutdown
     await close_redis()

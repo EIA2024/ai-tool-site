@@ -1,95 +1,92 @@
-"""Tests for the Task Decomposer tool module.
+"""Tests for the Task Decomposer plugin.
 
-The refactor moved the tool onto the typed-error contract: ``handle_invoke``
-takes ``(payload, db)``, returns the data payload only, and signals expected
-failures by raising ``ValidationError`` / ``NotFoundError`` / ``ProviderError``.
+Operations are now named Pydantic handlers (``analyze_task`` / ``list_history`` /
+``get_history`` / ``delete_history``) reached through the Host runtime. These
+tests drive the handlers directly with a ``ToolContext`` and pin the typed-error
+contract plus the input-model validation the Host performs before dispatch.
 """
 
 import pytest
+from pydantic import ValidationError as PydanticValidationError
 
 from app.core.config import settings
 from app.core.errors import NotFoundError, ProviderError, ValidationError
 from app.services.llm import (
     ProviderError as LlmProviderError,
-)
-from app.services.llm import (
     resolve_api_key,
     resolve_provider,
 )
-from app.services.task_decomposer_history import create_history
-from app.tools.modules.task_decomposer import (
-    TaskDecomposerTool,
-    _analysis_to_dict,
-    _history_to_dict,
-)
-from app.tools.modules.task_decomposer_client import (
+from app.tool_host.contracts import ToolContext
+from app.tool_plugins.task_decomposer.client import (
+    AnalyzeTaskInput,
     ModelTaskAnalysis,
+    TaskAnalysis,
     build_agent_prompt,
 )
-
-tool = TaskDecomposerTool()
+from app.tool_plugins.task_decomposer.plugin import (
+    HistoryIdInput,
+    ListHistoryInput,
+    analyze_task,
+    delete_history_item,
+    get_history_item,
+    list_history_items,
+    plugin,
+)
+from app.tool_plugins.task_decomposer.repository import (
+    count_history,
+    create_history,
+)
 
 # The DeepSeek provider, resolved once for the key-resolution unit tests.
 _DEEPSEEK = resolve_provider("deepseek-v4-flash")
 
 
-def test_tool_id_and_metadata():
-    assert tool.tool_id == "task_decomposer"
-    assert tool.name == "Task Decomposer"
-    assert tool.mode == "request-response"
+def test_manifest_metadata():
+    manifest = plugin.manifest()
+    assert manifest.id == "task_decomposer"
+    assert manifest.name == "Task Decomposer"
+    ids = [op.id for op in manifest.operations]
+    assert ids == ["analyze_task", "list_history", "get_history", "delete_history"]
+    assert manifest.ui.kind.value == "custom"
+    assert manifest.ui.layout.value == "fullscreen"
 
 
-def test_config_advertises_models_and_actions():
-    cfg = tool.config()
-    assert "analyze_task" in cfg["supported_actions"]
-    assert isinstance(cfg["models"], list)
-    assert cfg["default_model"] in cfg["models"]
+# ── Input-model validation (performed by the Host before dispatch) ──
 
 
-@pytest.mark.asyncio
-async def test_unknown_action(db):
-    with pytest.raises(ValidationError) as excinfo:
-        await tool.handle_invoke({"action": "bogus"}, db)
-    assert excinfo.value.code == "VALIDATION_ERROR"
-    assert "bogus" in str(excinfo.value)
+def test_analyze_task_missing_raw_task():
+    with pytest.raises(PydanticValidationError):
+        AnalyzeTaskInput.model_validate({"model": "deepseek-v4-flash"})
 
 
-@pytest.mark.asyncio
-async def test_analyze_task_missing_raw_task(db):
-    with pytest.raises(ValidationError) as excinfo:
-        await tool.handle_invoke({"action": "analyze_task"}, db)
-    assert excinfo.value.code == "VALIDATION_ERROR"
+def test_analyze_task_with_empty_task():
+    with pytest.raises(PydanticValidationError):
+        AnalyzeTaskInput.model_validate({"raw_task": "", "model": "deepseek-v4-flash"})
 
 
-@pytest.mark.asyncio
-async def test_analyze_task_with_empty_task(db):
-    with pytest.raises(ValidationError):
-        await tool.handle_invoke({"action": "analyze_task", "raw_task": ""}, db)
+def test_analyze_task_oversized_risk_hint_rejected():
+    """A single risk hint over the 200-char cap is rejected before any API call."""
+    with pytest.raises(PydanticValidationError):
+        AnalyzeTaskInput.model_validate(
+            {
+                "raw_task": "task",
+                "model": "deepseek-v4-flash",
+                "risk_hints": ["x" * 300],
+            }
+        )
+
+
+# ── Handler behaviour ──
 
 
 @pytest.mark.asyncio
 async def test_analyze_task_unsupported_model(db):
     with pytest.raises(ValidationError) as excinfo:
-        await tool.handle_invoke(
-            {"action": "analyze_task", "raw_task": "task", "model": "gpt-4o"}, db
-        )
-    assert "不支持" in str(excinfo.value)
-
-
-@pytest.mark.asyncio
-async def test_analyze_task_oversized_risk_hint_rejected(db):
-    """A single risk hint over the 200-char cap is rejected before any API call."""
-    with pytest.raises(ValidationError) as excinfo:
-        await tool.handle_invoke(
-            {
-                "action": "analyze_task",
-                "raw_task": "task",
-                "model": "deepseek-v4-flash",
-                "risk_hints": ["x" * 300],
-            },
-            db,
+        await analyze_task(
+            AnalyzeTaskInput(raw_task="task", model="gpt-4o"), ToolContext(db=db)
         )
     assert excinfo.value.code == "VALIDATION_ERROR"
+    assert "不支持" in str(excinfo.value)
 
 
 @pytest.mark.asyncio
@@ -97,20 +94,18 @@ async def test_analyze_task_coerces_numeric_raw_task(db, monkeypatch):
     """A numeric raw_task is coerced to a string instead of 500ing."""
     monkeypatch.setattr(settings, "deepseek_api_key", "sk-x")
     monkeypatch.setattr(
-        "app.tools.modules.task_decomposer.analyze_with_llm",
-        _fake_analyze,
+        "app.tool_plugins.task_decomposer.plugin.analyze_with_llm", _fake_analyze
     )
-    result = await tool.handle_invoke(
-        {"action": "analyze_task", "raw_task": 12345, "model": "deepseek-v4-flash"},
-        db,
+    result = await analyze_task(
+        AnalyzeTaskInput(raw_task="12345", model="deepseek-v4-flash"),
+        ToolContext(db=db),
     )
-    assert result["analysis"]["goal"] == "fake"
+    assert result.analysis.goal == "fake"
+    assert result.model == "deepseek-v4-flash"
 
 
 async def _fake_analyze(input_data):
     """Stands in for analyze_with_llm so the test needs no network."""
-    from app.tools.modules.task_decomposer_client import TaskAnalysis
-
     return TaskAnalysis(
         goal="fake",
         context=["c"],
@@ -130,17 +125,16 @@ async def test_analyze_task_no_api_key(db, monkeypatch):
     """Without .env key or session key, the client error surfaces as ProviderError."""
     monkeypatch.setattr(settings, "deepseek_api_key", "")
     with pytest.raises(ProviderError) as excinfo:
-        await tool.handle_invoke(
-            {
-                "action": "analyze_task",
-                "raw_task": "test task",
-                "context": "",
-                "task_type": "feature",
-                "risk_hints": [],
-                "model": "deepseek-v4-flash",
-                "session_api_key": "",
-            },
-            db,
+        await analyze_task(
+            AnalyzeTaskInput(
+                raw_task="test task",
+                context="",
+                task_type="feature",
+                risk_hints=[],
+                model="deepseek-v4-flash",
+                session_api_key="",
+            ),
+            ToolContext(db=db),
         )
     assert excinfo.value.code == "LLM_ERROR"
 
@@ -148,12 +142,10 @@ async def test_analyze_task_no_api_key(db, monkeypatch):
 @pytest.mark.asyncio
 async def test_analyze_task_prunes_history(db, monkeypatch):
     """History retention runs on analyze so the table stays bounded."""
-    from app.services.task_decomposer_history import count_history, create_history
-
     monkeypatch.setattr(settings, "task_decomposer_history_max_records", 3)
     monkeypatch.setattr(settings, "deepseek_api_key", "sk-x")
     monkeypatch.setattr(
-        "app.tools.modules.task_decomposer.analyze_with_llm", _fake_analyze
+        "app.tool_plugins.task_decomposer.plugin.analyze_with_llm", _fake_analyze
     )
 
     for i in range(3):
@@ -170,9 +162,9 @@ async def test_analyze_task_prunes_history(db, monkeypatch):
     await db.commit()
     assert await count_history(db) == 3
 
-    await tool.handle_invoke(
-        {"action": "analyze_task", "raw_task": "new task", "model": "deepseek-v4-flash"},
-        db,
+    await analyze_task(
+        AnalyzeTaskInput(raw_task="new task", model="deepseek-v4-flash"),
+        ToolContext(db=db),
     )
     await db.commit()
 
@@ -182,8 +174,8 @@ async def test_analyze_task_prunes_history(db, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_list_history_empty(db):
-    result = await tool.handle_invoke({"action": "list_history"}, db)
-    assert result["records"] == []
+    result = await list_history_items(ListHistoryInput(), ToolContext(db=db))
+    assert result.records == []
 
 
 @pytest.mark.asyncio
@@ -199,64 +191,27 @@ async def test_list_history_returns_saved_records(db):
         structured_output={"goal": "fix"},
     )
     await db.commit()
-    result = await tool.handle_invoke(
-        {"action": "list_history", "task_type": "bugfix"}, db
+    result = await list_history_items(
+        ListHistoryInput(task_type="bugfix"), ToolContext(db=db)
     )
-    assert len(result["records"]) == 1
-    assert result["records"][0]["raw_task"] == "Fix bug"
-    assert result["records"][0]["risk_level"] == "high"
+    assert len(result.records) == 1
+    assert result.records[0].raw_task == "Fix bug"
+    assert result.records[0].risk_level == "high"
 
 
 @pytest.mark.asyncio
 async def test_get_history_not_found(db):
     with pytest.raises(NotFoundError):
-        await tool.handle_invoke({"action": "get_history", "id": "missing"}, db)
+        await get_history_item(HistoryIdInput(id="missing"), ToolContext(db=db))
 
 
 @pytest.mark.asyncio
 async def test_delete_history_not_found(db):
     with pytest.raises(NotFoundError):
-        await tool.handle_invoke({"action": "delete_history", "id": "missing"}, db)
+        await delete_history_item(HistoryIdInput(id="missing"), ToolContext(db=db))
 
 
-def test_analysis_to_dict():
-    class MockAnalysis:
-        goal = "test"
-        context = ["ctx"]
-        constraints = ["c"]
-        done_when = ["d"]
-        failure_cases = ["f"]
-        verification = ["v"]
-        missing_questions = []
-        risk_level = "low"
-        non_goals = []
-        agent_prompt = "prompt"
-
-    d = _analysis_to_dict(MockAnalysis())
-    assert d["goal"] == "test"
-    assert d["agent_prompt"] == "prompt"
-    assert d["risk_level"] == "low"
-
-
-def test_history_to_dict():
-    class MockRecord:
-        id = "abc-123"
-        raw_task = "task"
-        context = "ctx"
-        task_type = "feature"
-        model_name = "deepseek-v4-flash"
-        risk_hints = ["data_loss"]
-        risk_level = "medium"
-        structured_output = {"goal": "g"}
-        created_at = None
-
-    d = _history_to_dict(MockRecord())
-    assert d["id"] == "abc-123"
-    assert d["task_type"] == "feature"
-    assert d["risk_level"] == "medium"
-
-
-# ── Model client unit tests ──
+# ── Model client unit tests (moved with the plugin) ──
 
 
 def test_build_agent_prompt_includes_sections():
@@ -300,28 +255,24 @@ def test_build_agent_prompt_with_empty_lists():
 
 
 def test_resolve_api_key_prefers_settings(monkeypatch):
-    """The shared client prefers settings.deepseek_api_key over a session key."""
     monkeypatch.setattr(settings, "deepseek_api_key", "env-key")
     result = resolve_api_key(_DEEPSEEK, session_api_key="sk-session-key")
     assert result == "env-key"
 
 
 def test_resolve_api_key_fallback(monkeypatch):
-    """The shared client falls back to a valid session key when env key is empty."""
     monkeypatch.setattr(settings, "deepseek_api_key", "")
     result = resolve_api_key(_DEEPSEEK, session_api_key="sk-session-key")
     assert result == "sk-session-key"
 
 
 def test_resolve_api_key_rejects_bad_session_key(monkeypatch):
-    """A session key not starting with 'sk-' must be rejected."""
     monkeypatch.setattr(settings, "deepseek_api_key", "")
     with pytest.raises(LlmProviderError, match="sk-"):
         resolve_api_key(_DEEPSEEK, session_api_key="not-a-key")
 
 
 def test_resolve_api_key_raises_when_both_missing(monkeypatch):
-    """The shared client raises when both keys are absent."""
     monkeypatch.setattr(settings, "deepseek_api_key", "")
     with pytest.raises(LlmProviderError, match="未配置"):
         resolve_api_key(_DEEPSEEK, session_api_key="")

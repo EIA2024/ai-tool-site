@@ -1,5 +1,7 @@
 import { Link } from "react-router-dom";
 
+/** Site chrome: brand + the operator-facing Usage link. The Dock (home) is the
+ * tool navigation surface, so no tool links are hardcoded here. */
 export default function NavBar() {
   return (
     <nav className="navbar">
@@ -7,10 +9,6 @@ export default function NavBar() {
         AI Tool Site
       </Link>
       <div className="nav-links">
-        <Link to="/tools/blank_tool">Blank Tool</Link>
-        <Link to="/tools/chat_tool">Chat Tool</Link>
-        <Link to="/tools/code_agent_flow_viz">Flow Visualizer</Link>
-        <Link to="/tools/task_decomposer">Task Decomposer</Link>
         <Link to="/usage">Usage</Link>
       </div>
     </nav>

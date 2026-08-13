@@ -9,9 +9,9 @@ from types import SimpleNamespace
 import pytest
 import pytest_asyncio
 
-from app.api.routes.tools import _client_ip
 from app.core import ratelimit
 from app.core.config import settings
+from app.tool_host.gateway import client_ip
 
 
 @pytest_asyncio.fixture(autouse=True)
@@ -49,21 +49,31 @@ async def test_config(api_client):
 
 @pytest.mark.asyncio
 async def test_tools_list(api_client):
+    """The Dock sees only the three public tools; the Blank example is hidden."""
     res = await api_client.get("/api/tools")
     body = res.json()
     assert body["success"] is True
-    tool_ids = {t["tool_id"] for t in body["data"]["tools"]}
-    assert {
-        "blank_tool",
-        "chat_tool",
-        "code_agent_flow_viz",
-        "task_decomposer",
-    } <= tool_ids
+    tool_ids = {t["id"] for t in body["data"]["tools"]}
+    assert tool_ids == {"chat_tool", "code_agent_flow_viz", "task_decomposer"}
+    assert "blank_tool" not in tool_ids
 
-    # config metadata is advertised so the frontend never hardcodes models
-    td = next(t for t in body["data"]["tools"] if t["tool_id"] == "task_decomposer")
-    assert "models" in td["config"]
-    assert "supported_actions" in td["config"]
+    # Manifests advertise operations (input/output JSON Schema) so the frontend
+    # never hardcodes the operation vocabulary.
+    chat = next(t for t in body["data"]["tools"] if t["id"] == "chat_tool")
+    operation_ids = {op["id"] for op in chat["operations"]}
+    assert "send_message" in operation_ids
+    assert "list_sessions" in operation_ids
+
+
+@pytest.mark.asyncio
+async def test_get_tool_includes_hidden(api_client):
+    """Direct access still resolves the hidden Blank tool (schema-rendered)."""
+    res = await api_client.get("/api/tools/blank_tool")
+    body = res.json()
+    assert body["success"] is True
+    tool = body["data"]["tool"]
+    assert tool["id"] == "blank_tool"
+    assert tool["ui"]["kind"] == "schema"
 
 
 @pytest.mark.asyncio
@@ -78,7 +88,7 @@ async def test_tool_not_found(api_client):
 @pytest.mark.asyncio
 async def test_invoke_blank_tool(api_client):
     res = await api_client.post(
-        "/api/tools/blank_tool/invoke", json={"payload": {"input": "hi"}}
+        "/api/tools/blank_tool/operations/echo", json={"payload": {"input": "hi"}}
     )
     assert res.status_code == 200
     body = res.json()
@@ -89,7 +99,8 @@ async def test_invoke_blank_tool(api_client):
 @pytest.mark.asyncio
 async def test_invoke_validation_error(api_client):
     res = await api_client.post(
-        "/api/tools/blank_tool/invoke", json={"payload": {"input": "x" * 4001}}
+        "/api/tools/blank_tool/operations/echo",
+        json={"payload": {"input": "x" * 4001}},
     )
     assert res.status_code == 200
     body = res.json()
@@ -99,19 +110,40 @@ async def test_invoke_validation_error(api_client):
 
 @pytest.mark.asyncio
 async def test_invoke_unknown_tool(api_client):
-    res = await api_client.post("/api/tools/nope/invoke", json={"payload": {}})
+    res = await api_client.post(
+        "/api/tools/nope/operations/echo", json={"payload": {}}
+    )
     assert res.status_code == 200
     assert res.json()["error"]["code"] == "NOT_FOUND"
+
+
+@pytest.mark.asyncio
+async def test_invoke_unknown_operation(api_client):
+    res = await api_client.post(
+        "/api/tools/blank_tool/operations/nope", json={"payload": {}}
+    )
+    assert res.status_code == 200
+    assert res.json()["error"]["code"] == "NOT_FOUND"
+
+
+@pytest.mark.asyncio
+async def test_realtime_operation_over_http_rejected(api_client):
+    """A realtime operation must be reached over WebSocket, not the REST path."""
+    res = await api_client.post(
+        "/api/tools/chat_tool/operations/send_message",
+        json={"payload": {"content": "hi"}},
+    )
+    assert res.status_code == 200
+    assert res.json()["error"]["code"] == "VALIDATION_ERROR"
 
 
 @pytest.mark.asyncio
 async def test_invoke_import_records_batch(api_client):
     """A batch import is one invoke (one rate-limit slot) and dedups in-place."""
     res = await api_client.post(
-        "/api/tools/code_agent_flow_viz/invoke",
+        "/api/tools/code_agent_flow_viz/operations/import_records",
         json={
             "payload": {
-                "action": "import_records",
                 "records": [
                     {
                         "stage_key": "s1",
@@ -148,8 +180,8 @@ async def test_invoke_import_records_batch(api_client):
 async def test_invoke_import_records_invalid_payload(api_client):
     """Malformed batch input returns a typed VALIDATION_ERROR, not a 500."""
     res = await api_client.post(
-        "/api/tools/code_agent_flow_viz/invoke",
-        json={"payload": {"action": "import_records", "records": "not-a-list"}},
+        "/api/tools/code_agent_flow_viz/operations/import_records",
+        json={"payload": {"records": "not-a-list"}},
     )
     assert res.status_code == 200
     body = res.json()
@@ -160,7 +192,7 @@ async def test_invoke_import_records_invalid_payload(api_client):
 @pytest.mark.asyncio
 async def test_audit_endpoint_records_invoke(api_client):
     await api_client.post(
-        "/api/tools/blank_tool/invoke", json={"payload": {"input": "audit me"}}
+        "/api/tools/blank_tool/operations/echo", json={"payload": {"input": "audit me"}}
     )
     res = await api_client.get("/api/audit/tool-calls?tool_id=blank_tool")
     body = res.json()
@@ -174,66 +206,82 @@ async def test_audit_endpoint_records_invoke(api_client):
 async def test_chat_session_crud(api_client):
     # create
     res = await api_client.post(
-        "/api/chat/sessions", json={"title": "My Chat", "tool_id": "chat_tool"}
+        "/api/tools/chat_tool/operations/create_session",
+        json={"payload": {"title": "My Chat"}},
     )
     body = res.json()
     assert body["success"] is True
     session_id = body["data"]["session"]["id"]
     assert body["data"]["session"]["title"] == "My Chat"
+    assert body["data"]["session"]["tool_id"] == "chat_tool"
 
     # list
-    res = await api_client.get("/api/chat/sessions")
+    res = await api_client.post(
+        "/api/tools/chat_tool/operations/list_sessions", json={"payload": {}}
+    )
     sessions = res.json()["data"]["sessions"]
     assert sessions[0]["id"] == session_id
 
     # get one
-    res = await api_client.get(f"/api/chat/sessions/{session_id}")
+    res = await api_client.post(
+        "/api/tools/chat_tool/operations/get_session",
+        json={"payload": {"session_id": session_id}},
+    )
     assert res.json()["data"]["session"]["tool_id"] == "chat_tool"
 
-    # add + list messages
+    # messages start empty
     res = await api_client.post(
-        f"/api/chat/sessions/{session_id}/messages",
-        json={"content": "hello", "role": "user"},
+        "/api/tools/chat_tool/operations/list_messages",
+        json={"payload": {"session_id": session_id}},
     )
-    assert res.json()["data"]["message"]["role"] == "user"
-    res = await api_client.get(f"/api/chat/sessions/{session_id}/messages")
-    messages = res.json()["data"]["messages"]
-    assert len(messages) == 1
-    assert messages[0]["content"] == "hello"
+    assert res.json()["data"]["messages"] == []
 
     # missing session -> NOT_FOUND
-    res = await api_client.get("/api/chat/sessions/does-not-exist")
+    res = await api_client.post(
+        "/api/tools/chat_tool/operations/get_session",
+        json={"payload": {"session_id": "does-not-exist"}},
+    )
     assert res.json()["error"]["code"] == "NOT_FOUND"
 
     # delete -> gone
-    res = await api_client.delete(f"/api/chat/sessions/{session_id}")
+    res = await api_client.post(
+        "/api/tools/chat_tool/operations/delete_session",
+        json={"payload": {"session_id": session_id}},
+    )
     assert res.json()["data"]["deleted"] is True
-    res = await api_client.get(f"/api/chat/sessions/{session_id}")
+    res = await api_client.post(
+        "/api/tools/chat_tool/operations/get_session",
+        json={"payload": {"session_id": session_id}},
+    )
     assert res.json()["error"]["code"] == "NOT_FOUND"
 
 
 @pytest.mark.asyncio
-async def test_chat_messages_returned_chronological(api_client):
+async def test_chat_messages_returned_chronological(api_client, db):
     """History reload shows the conversation oldest→newest, and a page limit
     returns the NEWEST messages (tail-first), not the oldest."""
-    res = await api_client.post(
-        "/api/chat/sessions", json={"title": "order", "tool_id": "chat_tool"}
-    )
-    session_id = res.json()["data"]["session"]["id"]
-    for text in ("first", "second", "third", "fourth", "fifth"):
-        await api_client.post(
-            f"/api/chat/sessions/{session_id}/messages",
-            json={"content": text, "role": "user"},
-        )
+    from app.tool_plugins.chat_tool.repository import add_message, create_session
 
-    res = await api_client.get(f"/api/chat/sessions/{session_id}/messages")
+    session = await create_session(db, title="order", tool_id="chat_tool")
+    await db.commit()
+    for text in ("first", "second", "third", "fourth", "fifth"):
+        await add_message(db, session.id, "user", text)
+    await db.commit()
+
+    res = await api_client.post(
+        "/api/tools/chat_tool/operations/list_messages",
+        json={"payload": {"session_id": session.id}},
+    )
     messages = res.json()["data"]["messages"]
     assert [m["content"] for m in messages] == [
         "first", "second", "third", "fourth", "fifth",
     ]
 
     # A page smaller than the conversation returns the tail, not the head.
-    res = await api_client.get(f"/api/chat/sessions/{session_id}/messages?limit=2")
+    res = await api_client.post(
+        "/api/tools/chat_tool/operations/list_messages",
+        json={"payload": {"session_id": session.id, "limit": 2}},
+    )
     assert [m["content"] for m in res.json()["data"]["messages"]] == [
         "fourth", "fifth",
     ]
@@ -249,7 +297,7 @@ async def test_rate_limit_429(api_client, monkeypatch):
     statuses = []
     for _ in range(4):
         res = await api_client.post(
-            "/api/tools/blank_tool/invoke", json={"payload": {"input": "x"}}
+            "/api/tools/blank_tool/operations/echo", json={"payload": {"input": "x"}}
         )
         statuses.append(res.status_code)
 
@@ -264,13 +312,14 @@ async def test_rate_limit_global_429(api_client, monkeypatch):
     monkeypatch.setattr(settings, "rate_limit_enabled", True)
     monkeypatch.setattr(settings, "rate_limit_per_minute", 100)
     monkeypatch.setattr(settings, "rate_limit_global_per_minute", 2)
+    monkeypatch.setattr(settings, "trust_proxy_headers", True)
     monkeypatch.setattr(ratelimit, "_redis_ok", False)
     ratelimit._memory.clear()
 
     statuses = []
     for ip in ("1.1.1.1", "2.2.2.2", "3.3.3.3"):
         res = await api_client.post(
-            "/api/tools/blank_tool/invoke",
+            "/api/tools/blank_tool/operations/echo",
             json={"payload": {"input": "x"}},
             headers={"x-forwarded-for": ip},
         )
@@ -284,7 +333,7 @@ async def test_rate_limit_global_429(api_client, monkeypatch):
 async def test_audit_log_redacts_secrets(api_client):
     """Live credentials in an invoke payload must never reach the audit log."""
     await api_client.post(
-        "/api/tools/blank_tool/invoke",
+        "/api/tools/blank_tool/operations/echo",
         json={
             "payload": {
                 "input": "hi",
@@ -308,7 +357,7 @@ async def test_invoke_prunes_audit_under_small_cap(api_client, monkeypatch):
     monkeypatch.setattr(settings, "audit_max_records", 3)
     for i in range(5):
         res = await api_client.post(
-            "/api/tools/blank_tool/invoke",
+            "/api/tools/blank_tool/operations/echo",
             json={"payload": {"input": f"call {i}"}},
         )
         assert res.status_code == 200
@@ -321,7 +370,7 @@ async def test_invoke_prunes_audit_under_small_cap(api_client, monkeypatch):
 @pytest.mark.asyncio
 async def test_invoke_coerces_non_string_input(api_client):
     res = await api_client.post(
-        "/api/tools/blank_tool/invoke", json={"payload": {"input": 123}}
+        "/api/tools/blank_tool/operations/echo", json={"payload": {"input": 123}}
     )
     assert res.status_code == 200
     body = res.json()
@@ -330,24 +379,10 @@ async def test_invoke_coerces_non_string_input(api_client):
 
 
 @pytest.mark.asyncio
-async def test_chat_message_coerces_non_string_content(api_client):
-    res = await api_client.post(
-        "/api/chat/sessions", json={"title": "coerce"}
-    )
-    session_id = res.json()["data"]["session"]["id"]
-    res = await api_client.post(
-        f"/api/chat/sessions/{session_id}/messages",
-        json={"content": 12345, "role": "user"},
-    )
-    assert res.status_code == 200
-    assert res.json()["data"]["message"]["content"] == "12345"
-
-
-@pytest.mark.asyncio
 async def test_request_body_size_capped(api_client):
     huge = {"payload": {"input": "x" * 2_000_000}}
     res = await api_client.post(
-        "/api/tools/blank_tool/invoke",
+        "/api/tools/blank_tool/operations/echo",
         content=__import__("json").dumps(huge),
         headers={"content-type": "application/json"},
     )
@@ -359,7 +394,7 @@ async def test_request_body_chunked_rejected(api_client):
     """A chunked body has no Content-Length, so the header cap alone would be
     bypassed — the middleware must reject Transfer-Encoding outright."""
     res = await api_client.post(
-        "/api/tools/blank_tool/invoke",
+        "/api/tools/blank_tool/operations/echo",
         content=b'{"payload":{"input":"x"}}',
         headers={"transfer-encoding": "chunked", "content-type": "application/json"},
     )
@@ -372,7 +407,7 @@ async def test_client_ip_respects_proxy_trust_setting(monkeypatch):
         headers={"x-forwarded-for": "9.9.9.9"}, client=SimpleNamespace(host="1.1.1.1")
     )
     monkeypatch.setattr(settings, "trust_proxy_headers", False)
-    assert _client_ip(fake) == "1.1.1.1"  # spoofed XFF ignored
+    assert client_ip(fake) == "1.1.1.1"  # spoofed XFF ignored
 
     monkeypatch.setattr(settings, "trust_proxy_headers", True)
-    assert _client_ip(fake) == "9.9.9.9"  # trusted proxy path used
+    assert client_ip(fake) == "9.9.9.9"  # trusted proxy path used

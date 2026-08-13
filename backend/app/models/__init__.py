@@ -1,22 +1,14 @@
-"""ORM models, split per domain for scale.
+"""Host-owned ORM models and shared declarative base.
 
-Import the ``Base`` class from here for Alembic metadata and tests:
-``from app.models import Base``.
+Tool-specific models live with their plugins and are imported by plugin
+discovery before table creation or Alembic schema inspection.
 """
 
-from app.models.analysis import TaskAnalysisHistory
 from app.models.audit import ToolCallRecord
 from app.models.base import Base, utcnow
-from app.models.chat import VALID_ROLES, ChatMessage, ChatSession
-from app.models.practice import AgentPracticeRecord
 
 __all__ = [
     "Base",
     "utcnow",
-    "VALID_ROLES",
-    "ChatSession",
-    "ChatMessage",
-    "AgentPracticeRecord",
-    "TaskAnalysisHistory",
     "ToolCallRecord",
 ]

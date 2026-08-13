@@ -2,7 +2,7 @@
 
 import pytest
 
-from app.services.practice_records import (
+from app.tool_plugins.code_agent_flow_viz.repository import (
     count_records,
     create_record,
     delete_record,

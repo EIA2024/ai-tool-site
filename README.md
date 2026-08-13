@@ -17,18 +17,19 @@
 project-root/
 ├── frontend/          # React + Vite + TypeScript 前端
 │   └── src/
-│       ├── components/     # 通用 UI 组件
-│       ├── pages/          # 页面 & 工具页面
-│       └── lib/            # API & WebSocket 客户端
+│       ├── components/     # 网站级 UI（Layout、NavBar、ErrorBoundary）
+│       ├── pages/          # Dock、动态路由、Schema 渲染器、Usage
+│       ├── lib/            # api / ToolClient / realtime 客户端
+│       ├── types/          # Host–Plugin 契约类型（ToolManifest 等）
+│       └── tool_plugins/   # 各工具专属前端 UI（chat、flow viz、task decomposer）
 ├── backend/           # Python FastAPI 后端
 │   └── app/
-│       ├── api/            # REST 路由
-│       ├── tools/          # 工具模块（可插拔架构）
-│       ├── services/       # 业务逻辑层
-│       ├── models/         # SQLAlchemy 模型
-│       ├── schemas/        # Pydantic 校验
-│       ├── ws/             # WebSocket 处理
-│       ├── sse/            # Server-Sent Events
+│       ├── tool_host/      # Host runtime：契约、自动发现、REST/WS 网关、站点配置
+│       ├── tool_plugins/   # 各插件：manifest + Pydantic handler + 模型/仓库
+│       ├── api/            # 站点级 REST（config、audit）
+│       ├── services/       # Host 级共享设施（llm、audit、cache）
+│       ├── models/         # Host 级 ORM（audit）
+│       ├── core/           # 配置、错误、限流、脱敏
 │       └── db/             # 数据库会话管理
 ├── docker-compose.yml  # PostgreSQL + Redis + Backend + Frontend
 └── docs/               # 开发文档
@@ -107,37 +108,50 @@ npm run dev
 
 ## 工具开发
 
-新工具只需继承 `BaseTool` 并注册到 `ToolRegistry`：
+新增一个工具只需一个**插件目录**：后端 `backend/app/tool_plugins/<tool_id>/`，复杂工具再可选加一个前端入口 `frontend/src/tool_plugins/<tool_id>/index.tsx`。网站（Host）会自动发现插件——**不需要**修改 `App.tsx`、导航或任何中心注册表；重新构建前端并重启后端后生效。
+
+后端插件 = 一个 `plugin.py`，声明版本化 manifest 和具名 operation handler：
 
 ```python
-from sqlalchemy.ext.asyncio import AsyncSession
+# backend/app/tool_plugins/my_tool/plugin.py
+from pydantic import BaseModel, Field
 
-from app.tools.base import BaseTool
-from app.core.errors import ToolError
+from app.tool_host.contracts import (
+    OperationDefinition, ToolContext, ToolPlugin, ToolUi, Transport, UiKind,
+)
 
 
-class MyTool(BaseTool):
-    tool_id = "my_tool"
-    name = "My Tool"
-    description = "My custom AI tool"
-    mode = "request-response"
+class EchoInput(BaseModel):
+    text: str = Field(min_length=1, max_length=4000)
 
-    async def handle_invoke(self, payload: dict, db: AsyncSession) -> dict:
-        # 你的工具逻辑。返回成功的 data 载荷（不带信封）；
-        # 预期的业务失败通过抛出 ToolError 表示。
-        if not payload.get("input"):
-            raise ToolError("input is required", code="INVALID_INPUT")
-        return {"result": payload["input"]}
 
-# 在 registry.py 中注册
-tool_registry.register(MyTool())
+class EchoOutput(BaseModel):
+    echo: str
+
+
+async def echo(payload: EchoInput, context: ToolContext) -> EchoOutput:
+    return EchoOutput(echo=payload.text)
+
+
+plugin = ToolPlugin(
+    id="my_tool",
+    version="1.0.0",
+    name="My Tool",
+    description="一个 request-response 示例工具",
+    ui=ToolUi(kind=UiKind.SCHEMA),  # schema → 前端用通用表单渲染，无需写前端
+    operations=(
+        OperationDefinition(
+            "echo", Transport.REQUEST_RESPONSE, EchoInput, EchoOutput, echo
+        ),
+    ),
+)
 ```
 
-前端对应添加页面并配置路由即可。关于返回数据 / 错误处理 / 数据库持久化的约定，详见 [AI 工具开发手册](docs/ai-tool-development-handbook.md)。
+- `ui.kind = "schema"`：前端用通用表单/结果渲染器自动承载，无需任何前端代码。
+- `ui.kind = "custom"`：再放一个 `frontend/src/tool_plugins/my_tool/index.tsx`，默认导出组件，接收绑定好的 `ToolClient`，调用 `client.invoke(operation, payload)` 或 `client.connect(operation)`（realtime），不自行拼接 URL。
+- `blank_tool` 是默认隐藏的 schema 示例插件。
 
-## 项目工作流
-
-本项目的开发遵循一套 Prompt-native 的 AI 协作工作流（详见 `.workflow/`），包括 Context 收集、Intent 确认、计划、执行、独立 Review 等阶段。
+持久化插件仍需显式编写 Alembic migration（插件发现不会自动改表）。关于返回数据 / 错误处理 / 数据库持久化的约定，详见 [AI 工具开发手册](docs/ai-tool-development-handbook.md)。
 
 ## 文档
 

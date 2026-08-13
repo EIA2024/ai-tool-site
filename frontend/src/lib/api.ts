@@ -52,8 +52,6 @@ async function request<T>(
   }
 
   if (!res.ok) {
-    // HTTP-level failure (e.g. 429 rate-limit, 500): the envelope is usually
-    // present; surface the typed error code/message when available.
     throw new ApiError(
       body.error?.code ?? "HTTP_ERROR",
       body.error?.message ?? `HTTP ${res.status}`,
@@ -91,16 +89,4 @@ export function del<T = unknown>(
   opts?: RequestOptions
 ): Promise<ApiResponse<T>> {
   return request<T>(path, { method: "DELETE" }, opts);
-}
-
-/**
- * Invoke a backend tool. The API wraps the tool's action payload in a
- * `{ payload: ... }` envelope; callers only ever think in the inner payload.
- */
-export function invokeTool<T = unknown>(
-  toolId: string,
-  payload: object,
-  opts?: RequestOptions
-): Promise<ApiResponse<T>> {
-  return post<T>(`/tools/${toolId}/invoke`, { payload }, opts);
 }

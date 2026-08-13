@@ -209,6 +209,22 @@ button:disabled {
   background: var(--bg-card);
   color: var(--text-dim);
 }
+.chat-key-input {
+  font-size: 0.8rem;
+  padding: 0.25rem 0.5rem;
+  border-radius: 0.25rem;
+  border: 1px solid var(--border);
+  background: var(--bg-card);
+  color: var(--text);
+  width: 220px;
+}
+.chat-key-input::placeholder {
+  color: var(--text-dim);
+}
+.chat-key-input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
 .ws-status {
   font-size: 0.8rem;
   padding: 0.2rem 0.5rem;
@@ -1430,4 +1446,163 @@ button:disabled {
   color: var(--text-dim);
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 12px;
+}
+
+/* Error text */
+.error-text {
+  color: var(--error);
+}
+
+/* Chat two-column layout (session sidebar + messages) */
+.chat-layout {
+  display: grid;
+  grid-template-columns: 220px minmax(0, 1fr);
+  gap: 1rem;
+  align-items: start;
+}
+.chat-sessions {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+  padding: 0.75rem;
+  max-height: 480px;
+  overflow-y: auto;
+}
+.chat-sessions h3 {
+  font-size: 0.9rem;
+  margin-bottom: 0.5rem;
+}
+.chat-sessions ul {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+.chat-sessions li {
+  display: flex;
+  align-items: stretch;
+  gap: 0.25rem;
+}
+.chat-session-btn {
+  flex: 1;
+  text-align: left;
+  background: transparent;
+  color: var(--text);
+  border: 1px solid transparent;
+  border-radius: 0.4rem;
+  padding: 0.4rem 0.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+.chat-session-btn:hover {
+  background: var(--border);
+}
+.chat-session-btn.active {
+  border-color: var(--accent);
+}
+.chat-session-title {
+  font-size: 0.85rem;
+}
+.chat-session-date {
+  font-size: 0.7rem;
+  color: var(--text-dim);
+}
+.chat-session-del {
+  background: transparent;
+  color: var(--text-dim);
+  border: none;
+  padding: 0 0.4rem;
+  font-size: 0.85rem;
+}
+.chat-session-del:hover {
+  background: transparent;
+  color: var(--error);
+}
+.chat-main {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+/* Generic schema-driven tool renderer */
+.schema-tool .schema-operation {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+  padding: 1rem;
+  margin-bottom: 1rem;
+}
+.schema-operation h3 {
+  font-size: 1rem;
+  font-weight: 600;
+  margin-bottom: 0.75rem;
+  font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
+}
+.schema-form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+.schema-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  font-size: 0.85rem;
+  color: var(--text-dim);
+}
+.schema-field input,
+.schema-field select,
+.schema-field textarea {
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 0.4rem;
+  background: var(--bg);
+  color: var(--text);
+  font-size: 0.9rem;
+}
+.schema-field input:focus,
+.schema-field select:focus,
+.schema-field textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+.schema-field textarea {
+  min-height: 6rem;
+  resize: vertical;
+}
+.schema-field-boolean {
+  flex-direction: row;
+  align-items: center;
+  gap: 0.5rem;
+}
+.schema-error {
+  margin-top: 0.75rem;
+  color: var(--error);
+  font-size: 0.85rem;
+}
+.schema-result {
+  margin-top: 0.75rem;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 0.4rem;
+  padding: 0.75rem;
+  overflow-x: auto;
+  font-family: "Fira Code", "Consolas", monospace;
+  font-size: 0.82rem;
+}
+
+/* Missing-plugin compatibility error */
+.plugin-missing {
+  border: 1px solid var(--warning);
+  border-radius: 0.5rem;
+  padding: 1rem;
+  color: var(--text-dim);
+  line-height: 1.6;
+}
+.plugin-missing code {
+  font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
+  background: var(--border);
+  padding: 0.05rem 0.3rem;
+  border-radius: 0.25rem;
 }

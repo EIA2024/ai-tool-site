@@ -1,32 +1,55 @@
-export interface ToolMeta {
-  tool_id: string;
+/* ── Host–plugin contract (mirrors the backend ToolManifest) ── */
+
+export type Transport = "request-response" | "realtime";
+export type UiKind = "schema" | "custom";
+export type UiLayout = "standard" | "fullscreen";
+
+/** A loose JSON Schema, sufficient for the generic schema renderer. */
+export interface JsonSchema {
+  type?: string;
+  title?: string;
+  description?: string;
+  default?: unknown;
+  properties?: Record<string, JsonSchema>;
+  required?: string[];
+  items?: JsonSchema;
+  enum?: unknown[];
+  anyOf?: JsonSchema[];
+  minLength?: number;
+  maxLength?: number;
+  minimum?: number;
+  maximum?: number;
+  [key: string]: unknown;
+}
+
+export interface OperationManifest {
+  id: string;
+  transport: Transport;
+  input_schema: JsonSchema;
+  output_schema: JsonSchema;
+}
+
+export interface ToolUi {
+  kind: UiKind;
+  layout: UiLayout;
+}
+
+export interface ToolManifest {
+  contract_version: string;
+  id: string;
+  version: string;
   name: string;
   description: string;
-  mode: "request-response" | "realtime";
-  config?: Record<string, unknown>;
+  ui: ToolUi;
+  operations: OperationManifest[];
 }
+
+/* ── API envelope ── */
 
 export interface ApiResponse<T = unknown> {
   success: boolean;
   data?: T;
   error?: { code: string; message: string };
-}
-
-export interface WsMessage {
-  type: string;
-  /** Present on "message" frames — the bubble body. */
-  content?: string;
-  /** Present on "message" frames — the speaker ("user" | "assistant"). */
-  sender?: string;
-  timestamp?: string;
-  /** Present on the server's "connected" frame — carries the DB session id. */
-  session_id?: string;
-  /** Present on the server's "connected" frame — selectable model ids. */
-  models?: string[];
-  /** Present on the server's "connected" frame — the default model. */
-  default_model?: string;
-  /** Present on the server's "error" frames — human-readable reason. */
-  message?: string;
 }
 
 /* ── Public runtime config (GET /api/config) ── */
@@ -65,131 +88,46 @@ export interface AuditListData {
   offset: number;
 }
 
-/* ── Chat sessions & messages ── */
+/* ── Realtime protocol ── */
 
-export interface ChatSession {
-  id: string;
-  title: string;
-  tool_id: string | null;
-  created_at: string | null;
-  updated_at: string | null;
+export type RealtimeStatus = "connecting" | "connected" | "disconnected" | "error";
+
+export type RealtimeServerEvent =
+  | { type: "ready"; tool_id?: string; operation_id?: string }
+  | { type: "progress"; request_id: string; data: Record<string, unknown> }
+  | { type: "delta"; request_id: string; data: Record<string, unknown> }
+  | { type: "result"; request_id: string; data: Record<string, unknown> }
+  | {
+      type: "error";
+      request_id: string | null;
+      data: { code: string; message: string };
+    };
+
+/** The bound realtime connection returned by `ToolClient.connect`. */
+export interface RealtimeConnection {
+  readonly url: string;
+  readonly isOpen: boolean;
+  open(): void;
+  send(payload: Record<string, unknown>): string;
+  close(): void;
+  onEvent(handler: (event: RealtimeServerEvent) => void): void;
+  onStatus(handler: (status: RealtimeStatus) => void): void;
 }
 
-export interface ChatMessage {
-  id: string;
-  session_id: string;
-  role: "user" | "assistant" | "system";
-  content: string;
-  created_at: string | null;
+/* ── ToolClient ── */
+
+export interface ToolClient {
+  readonly toolId: string;
+  invoke<T = unknown>(
+    operation: string,
+    payload?: Record<string, unknown>,
+    opts?: { timeoutMs?: number }
+  ): Promise<ApiResponse<T>>;
+  connect(operation: string): RealtimeConnection;
 }
 
-export interface ChatSessionListData {
-  sessions: ChatSession[];
-}
-
-export interface ChatMessagesData {
-  messages: ChatMessage[];
-}
-
-/* ── Code Agent Flow Visualizer types ── */
-
-export interface StageDefinition {
-  key: string;
-  number: number;
-  title: string;
-  hint: string;
-  goals: string[];
-  promptTemplate: string;
-  promptTemplateZh: string;
-  variables: string[];
-  checklist: string[];
-  commonErrors: string[];
-  completionCriteria: string[];
-}
-
-export interface PracticeRecord {
-  id: string;
-  stage_key: string;
-  user_input: string;
-  agent_output: string;
-  feedback: string;
-  next_steps: string;
-  content_hash: string;
-  created_at: string | null;
-  updated_at: string | null;
-}
-
-export interface InvokePayload {
-  action: "save_record" | "list_records" | "get_record" | "delete_record";
-  [key: string]: unknown;
-}
-
-export interface SaveRecordPayload extends InvokePayload {
-  action: "save_record";
-  stage_key: string;
-  user_input: string;
-  agent_output: string;
-  feedback: string;
-  next_steps: string;
-}
-
-export interface SaveRecordData {
-  record: PracticeRecord;
-  created: boolean;
-}
-
-export interface ListRecordsData {
-  records: PracticeRecord[];
-  /** Total rows matching the query (for honest counts + pagination). */
-  total: number;
-}
-
-export interface ImportRecordsData {
-  imported: number;
-  skipped: number;
-}
-
-/* ── Task Decomposer types ── */
-
-export interface TaskAnalysis {
-  goal: string;
-  context: string[];
-  constraints: string[];
-  done_when: string[];
-  failure_cases: string[];
-  verification: string[];
-  missing_questions: string[];
-  risk_level: "low" | "medium" | "high";
-  non_goals: string[];
-  agent_prompt: string;
-}
-
-export interface TaskDecomposerInput {
-  raw_task: string;
-  context: string;
-  task_type: string;
-  model: string;
-  risk_hints: string[];
-  session_api_key?: string;
-}
-
-export interface HistoryRecord {
-  id: string;
-  raw_task: string;
-  context: string;
-  task_type: string;
-  model_name: string;
-  risk_hints: string[];
-  risk_level: string;
-  structured_output: TaskAnalysis;
-  created_at: string | null;
-}
-
-export interface AnalyzeTaskData {
-  analysis: TaskAnalysis;
-  model: string;
-}
-
-export interface ListHistoryData {
-  records: HistoryRecord[];
+/** Props every custom plugin's default export receives. */
+export interface ToolPluginProps {
+  client: ToolClient;
+  manifest: ToolManifest;
 }

@@ -6,7 +6,7 @@ disposes the engine after each test so the aiosqlite worker thread terminates).
 
 import pytest
 
-from app.services.task_decomposer_history import (
+from app.tool_plugins.task_decomposer.repository import (
     create_history,
     delete_history,
     get_history,

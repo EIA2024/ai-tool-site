@@ -48,6 +48,12 @@ async def _init_db() -> None:
     from sqlalchemy.ext.asyncio import create_async_engine
 
     from app.models import Base
+    from app.tool_host.discovery import get_registry
+
+    # Import every plugin's ORM models before table creation so the SQLite
+    # fallback schema includes the plugin tables (same as alembic/env.py and
+    # the test conftest).
+    get_registry()
 
     engine = create_async_engine(os.environ["DATABASE_URL"])
     try:

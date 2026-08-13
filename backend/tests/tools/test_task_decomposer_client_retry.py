@@ -9,7 +9,7 @@ surface immediately, and retries are bounded.
 import pytest
 
 from app.services.llm import ProviderError
-from app.tools.modules.task_decomposer_client import (
+from app.tool_plugins.task_decomposer.client import (
     AnalyzeTaskInput,
     ModelTaskAnalysis,
     analyze_with_llm,
@@ -48,7 +48,7 @@ async def test_retries_then_succeeds_on_bad_roll(monkeypatch):
         return _VALID_ANALYSIS
 
     monkeypatch.setattr(
-        "app.tools.modules.task_decomposer_client._call_once", flaky
+        "app.tool_plugins.task_decomposer.client._call_once", flaky
     )
     result = await analyze_with_llm(_INPUT)
     assert result.goal == "goal"
@@ -66,7 +66,7 @@ async def test_non_retryable_failure_raises_immediately(monkeypatch):
         raise ProviderError("模型服务返回错误：HTTP 401 Unauthorized")
 
     monkeypatch.setattr(
-        "app.tools.modules.task_decomposer_client._call_once", always_bad
+        "app.tool_plugins.task_decomposer.client._call_once", always_bad
     )
     with pytest.raises(ProviderError, match="401"):
         await analyze_with_llm(_INPUT)
@@ -83,7 +83,7 @@ async def test_retries_are_bounded_after_persistent_failure(monkeypatch):
         raise ProviderError("无法连接模型服务", retryable=True)
 
     monkeypatch.setattr(
-        "app.tools.modules.task_decomposer_client._call_once", always_bad
+        "app.tool_plugins.task_decomposer.client._call_once", always_bad
     )
     with pytest.raises(ProviderError, match="无法连接"):
         await analyze_with_llm(_INPUT)
@@ -105,7 +105,7 @@ async def test_5xx_is_retryable(monkeypatch):
         return _VALID_ANALYSIS
 
     monkeypatch.setattr(
-        "app.tools.modules.task_decomposer_client._call_once", fail_then_succeed
+        "app.tool_plugins.task_decomposer.client._call_once", fail_then_succeed
     )
     result = await analyze_with_llm(_INPUT)
     assert result.goal == "goal"
