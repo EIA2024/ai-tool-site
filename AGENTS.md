@@ -9,6 +9,7 @@ renders them through the Host APIs.
 ## Run And Verify
 
 - macOS local stack: `./start.sh`
+- macOS Finder: double-click `start.command`
 - Windows local stack: `start.bat`
 - Local mode uses SQLite and does not require PostgreSQL or Redis.
 - Backend tests: `cd backend && .venv/bin/pytest`
